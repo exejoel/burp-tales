@@ -1,0 +1,64 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  recipes   Recipe[]
+  visits    Visit[]
+  createdAt DateTime @default(now())
+}
+
+model Recipe {
+  id            String    @id @default(cuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id])
+  title         String
+  sourceUrl     String?
+  imageUrl      String?
+  ingredients   String    // newline-separated text for now; can normalize into a table later
+  steps         String    // same — plain text for now
+  tags          Tag[]     @relation("RecipeTags")
+  rating        Int?
+  cookedCount   Int       @default(0)
+  lastCookedAt  DateTime?
+  createdAt     DateTime  @default(now())
+}
+
+model Restaurant {
+  id      String  @id @default(cuid())
+  name    String
+  cuisine String?
+  city    String?
+  address String?
+  visits  Visit[]
+}
+
+model Visit {
+  id           String     @id @default(cuid())
+  userId       String
+  user         User       @relation(fields: [userId], references: [id])
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+  date         DateTime
+  rating       Int?
+  notes        String?
+  dishesTried  String?    // newline-separated text for now
+  createdAt    DateTime   @default(now())
+}
+
+model Tag {
+  id      String   @id @default(cuid())
+  name    String
+  type    String   // "recipe" or "restaurant"
+  recipes Recipe[] @relation("RecipeTags")
+
+  @@unique([name, type])
+}
