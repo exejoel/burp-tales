@@ -2,21 +2,26 @@ import { Suspense } from "react";
 import { prisma } from "@/lib/prisma";
 import Link from "next/link";
 import RecipeList from "@/components/RecipeList";
+import { isOwner } from "@/lib/owner";
 
 export const dynamic = "force-dynamic";
 
-// No `async` and no data here, so the heading and Add button are sent
-// right away. Only the part inside <Suspense> waits for the database.
-export default function RecipesPage() {
+// The owner check only reads a cookie, so it's fast and the heading still
+// arrives right away. Only the part inside <Suspense> waits for the database.
+export default async function RecipesPage() {
+  const canEdit = await isOwner();
+
   return (
     <main className="mx-auto w-full max-w-xl px-6 py-14">
       <header className="mb-10 text-center">
         <h1 className="font-display text-5xl font-medium tracking-tight">
           Recipes
         </h1>
-        <Link href="/recipes/new" className="btn-primary mt-6">
-          Add recipe
-        </Link>
+        {canEdit && (
+          <Link href="/recipes/new" className="btn-primary mt-6">
+            Add recipe
+          </Link>
+        )}
       </header>
 
       <Suspense fallback={<RecipeListSkeleton />}>
@@ -39,7 +44,7 @@ async function RecipeListData() {
   if (recipes.length === 0) {
     return (
       <p className="text-center text-muted">
-        No recipes yet. Your first one will show up here.
+        No recipes yet.
       </p>
     );
   }

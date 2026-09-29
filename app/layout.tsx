@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { Cormorant_Garamond, Instrument_Sans } from "next/font/google";
 import Link from "next/link";
 import NavLinks from "@/components/NavLinks";
+import { SignOutButton } from "@/components/AuthButtons";
+import { isOwner } from "@/lib/owner";
 import "./globals.css";
 
 // Display face for the wordmark and dish names; body face for everything else.
@@ -22,7 +24,11 @@ export const metadata: Metadata = {
   description: "A personal food journal: recipes and restaurant visits",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default async function RootLayout({ children }: LayoutProps<"/">) {
+  // Only reads the encrypted session cookie, so it's cheap. Signing out
+  // calls router.refresh(), which re-renders this layout without the button.
+  const signedIn = await isOwner();
+
   return (
     <html
       lang="en"
@@ -37,7 +43,12 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             >
               Burp Tales
             </Link>
-            <NavLinks />
+            <div className="flex items-baseline gap-6">
+              <NavLinks />
+              {signedIn && (
+                <SignOutButton className="text-sm text-muted transition-colors hover:text-ink disabled:opacity-50" />
+              )}
+            </div>
           </nav>
         </header>
         {children}

@@ -1,96 +1,56 @@
-"use client";
-
-import { useState, useTransition } from "react";
+import type { Metadata } from "next";
 import Link from "next/link";
-import { createRecipe, fetchRecipeFromUrl } from "../actions";
-import RecipeForm, { type RecipeFormValues } from "@/components/RecipeForm";
+import { isOwner } from "@/lib/owner";
+import { SignInButton, SignOutButton } from "@/components/AuthButtons";
 
-export default function NewRecipePage() {
-  const [url, setUrl] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [isFetching, startFetching] = useTransition();
+export const dynamic = "force-dynamic";
 
-  // Values from the last URL fetch, used to seed the form.
-  const [fetched, setFetched] = useState<RecipeFormValues | undefined>();
-  // Changing this number changes the form's `key`, so React mounts a
-  // fresh form (and a fresh ingredient editor) seeded with `fetched`.
-  const [fetchCount, setFetchCount] = useState(0);
+// Not linked from anywhere, and hidden from search engines.
+export const metadata: Metadata = {
+  title: "Sign in · Burp Tales",
+  robots: { index: false, follow: false },
+};
 
-  function handleFetch() {
-    setError(null);
-    if (!url) return;
-    startFetching(async () => {
-      try {
-        const data = await fetchRecipeFromUrl(url);
-        setFetched({
-          title: data.title,
-          ingredients: data.ingredients ?? "",
-          steps: data.steps ?? "",
-          sourceUrl: url,
-          imageUrl: data.imageUrl || "",
-        });
-        setFetchCount((count) => count + 1);
-
-        if (!data.ingredients && !data.steps) {
-          setError(
-            "No structured recipe data found on this page. The title and image were filled in; add the ingredients and steps yourself."
-          );
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Couldn't fetch that URL.");
-      }
-    });
-  }
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string }>;
+}) {
+  const [{ error }, signedIn] = await Promise.all([searchParams, isOwner()]);
 
   return (
-    <main className="mx-auto w-full max-w-xl px-6 py-14">
-      <Link href="/recipes" className="link-quiet">
-        ← All recipes
-      </Link>
-      <h1 className="mt-10 mb-10 font-display text-5xl font-medium tracking-tight">
-        Add a recipe
+    <main className="mx-auto w-full max-w-sm px-6 py-24 text-center">
+      <h1 className="font-display text-4xl font-medium tracking-tight">
+        {signedIn ? "You're signed in" : "Owner sign in"}
       </h1>
 
-      <section className="mb-10 border-b border-rule pb-10">
-        <label htmlFor="recipe-url" className="label">
-          Start from a link (optional)
-        </label>
-        <div className="flex gap-2">
-          <input
-            id="recipe-url"
-            type="url"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://..."
-            aria-describedby="recipe-url-hint"
-            className="field min-w-0 flex-1"
-          />
-          <button
-            type="button"
-            onClick={handleFetch}
-            disabled={isFetching || !url}
-            className="btn-quiet shrink-0"
-          >
-            {isFetching ? "Fetching..." : "Fetch"}
-          </button>
-        </div>
-        <p id="recipe-url-hint" className="mt-1.5 text-sm text-muted">
-          Fills in the title, ingredients, and steps when the page lists them.
-        </p>
-        {error && (
-          <p role="alert" className="field-error">
-            {error}
+      {signedIn ? (
+        <>
+          <p className="mt-3 text-muted">
+            You can add, edit, and delete recipes.
           </p>
-        )}
-      </section>
-
-      <RecipeForm
-        key={fetchCount}
-        action={createRecipe}
-        initialValues={fetched}
-        submitLabel="Save recipe"
-        pendingLabel="Saving..."
-      />
+          <div className="mt-8 flex justify-center gap-2">
+            <Link href="/recipes" className="btn-primary">
+              Go to recipes
+            </Link>
+            <SignOutButton />
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="mt-3 text-muted">
+            Editing is limited to the site owner.
+          </p>
+          {error && (
+            <p role="alert" className="mt-6 text-sm text-danger">
+              That account can&apos;t sign in here.
+            </p>
+          )}
+          <div className="mt-8 flex justify-center">
+            <SignInButton />
+          </div>
+        </>
+      )}
     </main>
   );
 }

@@ -4,8 +4,10 @@ import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { scrapeRecipeFromUrl } from "@/lib/scrapeRecipe";
+import { requireOwner } from "@/lib/owner";
 
-// TODO: replace with the real logged-in user once auth is added
+// The owner's row in the User table. Every recipe belongs to it, since
+// only the owner can write (see requireOwner below).
 const PLACEHOLDER_USER_ID = "cmtxs8n2l0000muiy9ezqjki9";
 
 // What a create or update action sends back to the form when it can't
@@ -30,7 +32,10 @@ type RecipeFields = {
   steps: string;
 };
 
+// Owner-only too: left open, anyone could make your server fetch any URL
+// they choose (server-side request forgery).
 export async function fetchRecipeFromUrl(url: string) {
+  await requireOwner();
   return scrapeRecipeFromUrl(url);
 }
 
@@ -67,6 +72,9 @@ export async function createRecipe(
   _prevState: RecipeFormState,
   formData: FormData
 ): Promise<RecipeFormState> {
+  // Check first, before reading or validating anything.
+  await requireOwner();
+
   const result = readRecipeFields(formData);
   if (!result.ok) return result.state;
 
@@ -105,6 +113,9 @@ export async function updateRecipe(
   _prevState: RecipeFormState,
   formData: FormData
 ): Promise<RecipeFormState> {
+  // Check first, before reading or validating anything.
+  await requireOwner();
+
   const result = readRecipeFields(formData);
   if (!result.ok) return result.state;
 
@@ -135,6 +146,8 @@ export async function updateRecipe(
 // Same trust rule as updateRecipe: the id comes from the browser, so
 // matching on userId means you can only delete your own recipes.
 export async function deleteRecipe(id: string) {
+  await requireOwner();
+
   await prisma.recipe.delete({
     where: { id, userId: PLACEHOLDER_USER_ID },
   });

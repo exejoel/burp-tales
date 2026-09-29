@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import DeleteRecipeButton from "@/components/DeleteRecipeButton";
+import { isOwner } from "@/lib/owner";
 
 export const dynamic = "force-dynamic";
 
@@ -24,7 +25,11 @@ export default async function RecipeDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const recipe = await prisma.recipe.findUnique({ where: { id } });
+  // Two independent lookups, so run them at the same time.
+  const [recipe, canEdit] = await Promise.all([
+    prisma.recipe.findUnique({ where: { id } }),
+    isOwner(),
+  ]);
 
   if (!recipe) notFound();
 
@@ -42,10 +47,14 @@ export default async function RecipeDetailPage({
           {recipe.title}
         </h1>
         <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
-          <Link href={`/recipes/${recipe.id}/edit`} className="btn-quiet">
-            Edit
-          </Link>
-          <DeleteRecipeButton recipeId={recipe.id} recipeTitle={recipe.title} />
+          {canEdit && (
+            <>
+              <Link href={`/recipes/${recipe.id}/edit`} className="btn-quiet">
+                Edit
+              </Link>
+              <DeleteRecipeButton recipeId={recipe.id} recipeTitle={recipe.title} />
+            </>
+          )}
           {isWebUrl(recipe.sourceUrl) && (
             <a
               href={recipe.sourceUrl}

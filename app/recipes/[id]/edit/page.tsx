@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import RecipeForm from "@/components/RecipeForm";
 import { updateRecipe } from "../../actions";
+import { isOwner } from "@/lib/owner";
 
 export const dynamic = "force-dynamic";
 
@@ -11,6 +12,9 @@ export default async function EditRecipePage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  // Checked before the database query: visitors get a 404 and cost nothing.
+  if (!(await isOwner())) notFound();
+
   const { id } = await params;
   const recipe = await prisma.recipe.findUnique({
     where: { id },
