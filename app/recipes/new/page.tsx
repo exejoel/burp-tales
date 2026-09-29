@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import Link from "next/link";
 import { createRecipe, fetchRecipeFromUrl } from "../actions";
 import RecipeForm, { type RecipeFormValues } from "@/components/RecipeForm";
 
@@ -42,35 +43,46 @@ export default function NewRecipePage() {
   }
 
   return (
-    <main className="max-w-xl mx-auto p-8">
-      <h1 className="text-2xl font-semibold mb-6">Add a recipe</h1>
+    <main className="mx-auto w-full max-w-xl px-6 py-14">
+      <Link href="/recipes" className="link-quiet">
+        ← All recipes
+      </Link>
+      <h1 className="mt-10 mb-10 font-display text-5xl font-medium tracking-tight">
+        Add a recipe
+      </h1>
 
-      <div className="mb-6 p-4 border rounded-lg bg-gray-50">
-        <label
-          htmlFor="recipe-url"
-          className="block text-sm font-medium mb-1 text-gray-900"
-        >
-          Paste a recipe URL (optional)
+      <section className="mb-10 border-b border-rule pb-10">
+        <label htmlFor="recipe-url" className="label">
+          Start from a link (optional)
         </label>
         <div className="flex gap-2">
           <input
             id="recipe-url"
+            type="url"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             placeholder="https://..."
-            className="flex-1 border rounded-md px-3 py-2 text-gray-900 bg-white"
+            aria-describedby="recipe-url-hint"
+            className="field min-w-0 flex-1"
           />
           <button
             type="button"
             onClick={handleFetch}
             disabled={isFetching || !url}
-            className="bg-gray-800 text-white px-4 py-2 rounded-md text-sm disabled:opacity-50"
+            className="btn-quiet shrink-0"
           >
             {isFetching ? "Fetching..." : "Fetch"}
           </button>
         </div>
-        {error && <p className="text-sm text-red-600 mt-2">{error}</p>}
-      </div>
+        <p id="recipe-url-hint" className="mt-1.5 text-sm text-muted">
+          Fills in the title, ingredients, and steps when the page lists them.
+        </p>
+        {error && (
+          <p role="alert" className="field-error">
+            {error}
+          </p>
+        )}
+      </section>
 
       <RecipeForm
         key={fetchCount}

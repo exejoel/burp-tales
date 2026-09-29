@@ -18,23 +18,21 @@ export default function RecipesError({
   }, [error]);
 
   return (
-    <main className="max-w-2xl mx-auto p-8">
-      <h1 className="text-xl font-semibold mb-2">Couldn&apos;t load this page</h1>
-      <p className="text-gray-500 mb-4">
+    <main className="mx-auto w-full max-w-xl px-6 py-24 text-center">
+      <h1 className="font-display text-4xl font-medium tracking-tight">
+        Couldn&apos;t load this page
+      </h1>
+      <p className="mt-3 text-muted">
         The recipe database may be slow to respond. Try again in a moment.
       </p>
-      <div className="flex gap-2">
+      <div className="mt-8 flex justify-center gap-2">
         {/* unstable_retry re-fetches the server data and re-renders.
             The older reset() only re-renders, so a failed database
             query would just fail again. */}
-        <button
-          type="button"
-          onClick={() => unstable_retry()}
-          className="bg-black text-white px-4 py-2 rounded-md text-sm"
-        >
+        <button type="button" onClick={() => unstable_retry()} className="btn-primary">
           Try again
         </button>
-        <Link href="/" className="border px-4 py-2 rounded-md text-sm">
+        <Link href="/" className="btn-quiet">
           Go home
         </Link>
       </div>

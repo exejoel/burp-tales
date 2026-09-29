@@ -66,10 +66,6 @@ function createInitialState(initialIngredients: string[]): Ingredient[] {
 
 // ---------- Component ----------
 
-const inputClass = "flex-1 border rounded-md px-3 py-2 text-gray-900 bg-white";
-const iconButtonClass =
-  "border rounded-md px-2 py-1 text-sm disabled:opacity-30 hover:bg-gray-100";
-
 export default function IngredientEditor({
   initialIngredients = [],
 }: IngredientEditorProps) {
@@ -88,7 +84,7 @@ export default function IngredientEditor({
 
   return (
     <fieldset>
-      <legend className="block text-sm font-medium mb-2">Ingredients</legend>
+      <legend className="label">Ingredients</legend>
 
       {/* This is what the form actually submits, in the same
           newline-separated format your server action already expects. */}
@@ -96,7 +92,7 @@ export default function IngredientEditor({
 
       <ul className="space-y-2">
         {ingredients.map((item, index) => (
-          <li key={item.id} className="flex gap-2 items-center">
+          <li key={item.id} className="flex items-center gap-1">
             <input
               type="text"
               value={item.text}
@@ -105,7 +101,7 @@ export default function IngredientEditor({
               }
               placeholder="e.g. 2 cups flour"
               aria-label={`Ingredient ${index + 1}`}
-              className={inputClass}
+              className="field min-w-0 flex-1 mr-1"
             />
 
             {/* type="button" matters: the default inside a form is
@@ -117,7 +113,7 @@ export default function IngredientEditor({
               }
               disabled={index === 0}
               aria-label={`Move ingredient ${index + 1} up`}
-              className={iconButtonClass}
+              className="btn-icon"
             >
               ↑
             </button>
@@ -128,7 +124,7 @@ export default function IngredientEditor({
               }
               disabled={index === ingredients.length - 1}
               aria-label={`Move ingredient ${index + 1} down`}
-              className={iconButtonClass}
+              className="btn-icon"
             >
               ↓
             </button>
@@ -137,7 +133,7 @@ export default function IngredientEditor({
               onClick={() => dispatch({ type: "removed", id: item.id })}
               disabled={ingredients.length === 1}
               aria-label={`Remove ingredient ${index + 1}`}
-              className={iconButtonClass}
+              className="btn-icon"
             >
               ✕
             </button>
@@ -150,7 +146,7 @@ export default function IngredientEditor({
         // The ID is created here, in the event handler, not inside the
         // reducer, which keeps the reducer pure.
         onClick={() => dispatch({ type: "added", id: crypto.randomUUID() })}
-        className="mt-3 text-sm border rounded-md px-3 py-1.5 hover:bg-gray-100"
+        className="btn-quiet mt-3"
       >
         Add ingredient
       </button>

@@ -33,7 +33,7 @@ export default function DeleteRecipeButton({
       type="button"
       onClick={handleClick}
       disabled={isPending}
-      className="border border-red-600 text-red-600 px-3 py-1.5 rounded-md text-sm hover:bg-red-50 disabled:opacity-50"
+      className="btn-danger-quiet"
     >
       {isPending ? "Deleting..." : "Delete"}
     </button>

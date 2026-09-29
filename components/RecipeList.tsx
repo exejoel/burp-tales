@@ -16,8 +16,6 @@ type RecipeListProps = {
   recipes: RecipeSummary[];
 };
 
-const inputClass = "border rounded-md px-3 py-2 text-gray-900 bg-white";
-
 // Write the search to the URL without adding history entries or
 // asking the server for anything. An empty search is left out, so an
 // unfiltered list stays at plain /recipes.
@@ -35,13 +33,25 @@ function syncUrl(search: string) {
   );
 }
 
-// Pure helper, outside the component: easy to read and easy to test.
+// Pure helpers, outside the component: easy to read and easy to test.
 function matchesSearch(recipe: RecipeSummary, query: string): boolean {
   if (query === "") return true;
   return (
     recipe.title.toLowerCase().includes(query) ||
     recipe.ingredients.toLowerCase().includes(query)
   );
+}
+
+// The line under each dish name, like a menu description:
+// "ghee, paneer, palak" or "flour, eggs, milk, butter, sugar, and 3 more".
+function ingredientPreview(text: string, max = 5): string {
+  const items = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const shown = items.slice(0, max).join(", ");
+  const extra = items.length - max;
+  return extra > 0 ? `${shown}, and ${extra} more` : shown;
 }
 
 export default function RecipeList({ recipes }: RecipeListProps) {
@@ -75,44 +85,52 @@ export default function RecipeList({ recipes }: RecipeListProps) {
 
   return (
     <div>
-      <input
-        type="search"
-        value={search}
-        onChange={(e) => handleSearchChange(e.target.value)}
-        placeholder="Search by title or ingredient"
-        aria-label="Search recipes"
-        className={`${inputClass} w-full mb-6`}
-      />
+      <div className="mx-auto max-w-sm">
+        <input
+          type="search"
+          value={search}
+          onChange={(e) => handleSearchChange(e.target.value)}
+          placeholder="Search by dish or ingredient"
+          aria-label="Search recipes"
+          className="field"
+        />
+      </div>
 
-      {isFiltering && (
-        <p className="text-sm text-gray-500 mb-3" aria-live="polite">
-          Showing {filteredRecipes.length} of {recipes.length} recipes
-        </p>
-      )}
+      {/* Always rendered, so screen readers are already watching it when
+          the count appears, and the list below doesn't jump. */}
+      <p aria-live="polite" className="mt-3 mb-8 h-5 text-center text-sm text-muted">
+        {isFiltering && `${filteredRecipes.length} of ${recipes.length} recipes`}
+      </p>
 
       {filteredRecipes.length === 0 ? (
-        <div className="text-gray-500">
-          <p>No recipes match “{search.trim()}”.</p>
-          <button
-            type="button"
-            onClick={clearSearch}
-            className="mt-2 text-sm underline"
-          >
+        <div className="text-center">
+          <p className="text-muted">No recipes match “{search.trim()}”.</p>
+          <button type="button" onClick={clearSearch} className="btn-quiet mt-4">
             Clear search
           </button>
         </div>
       ) : (
-        <ul className="space-y-3">
-          {filteredRecipes.map((recipe) => (
-            <li key={recipe.id}>
-              <Link
-                href={`/recipes/${recipe.id}`}
-                className="block border rounded-lg p-4 hover:bg-gray-50"
-              >
-                <h2 className="font-medium">{recipe.title}</h2>
-              </Link>
-            </li>
-          ))}
+        <ul className="menu">
+          {filteredRecipes.map((recipe) => {
+            const preview = ingredientPreview(recipe.ingredients);
+            return (
+              <li key={recipe.id}>
+                <Link
+                  href={`/recipes/${recipe.id}`}
+                  className="group block text-center"
+                >
+                  <h2 className="font-display text-3xl font-medium text-balance transition-colors group-hover:text-basil">
+                    {recipe.title}
+                  </h2>
+                  {preview && (
+                    <p className="mt-1.5 text-sm text-muted text-balance">
+                      {preview}
+                    </p>
+                  )}
+                </Link>
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>

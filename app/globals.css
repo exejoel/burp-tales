@@ -1,26 +1,111 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/* ---------- Theme ----------
+   A tasting-menu look: plain paper, dark ink, one basil accent.
+   Change a value here and it changes everywhere. */
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+:root {
+  --paper: #fcfcfa;
+  --ink: #1c1d1a;
+  --muted: #676a62;
+  --rule: #e2e3de;
+  --basil: #2f5d3a;
+  --basil-contrast: #ffffff;
+  --danger: #b3261e;
+  color-scheme: light;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --paper: #121412;
+    --ink: #ecede8;
+    --muted: #9b9e95;
+    --rule: #2b2e2a;
+    --basil: #9ccaa6;
+    --basil-contrast: #102015;
+    --danger: #f2837a;
+    color-scheme: dark;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* Makes the tokens available as Tailwind classes:
+   bg-paper, text-ink, text-muted, border-rule, text-basil, font-display... */
+@theme inline {
+  --color-paper: var(--paper);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-rule: var(--rule);
+  --color-basil: var(--basil);
+  --color-basil-contrast: var(--basil-contrast);
+  --color-danger: var(--danger);
+  --font-sans: var(--font-instrument-sans);
+  --font-display: var(--font-cormorant);
+}
+
+@layer base {
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font-sans), system-ui, sans-serif;
+  }
+
+  /* One visible focus style for every link, button, and field. */
+  :focus-visible {
+    outline: 2px solid var(--basil);
+    outline-offset: 2px;
+  }
+}
+
+/* ---------- Shared building blocks ----------
+   Use these on the restaurant pages too, so both halves match. */
+
+@layer components {
+  .btn-primary {
+    @apply inline-flex items-center justify-center rounded-full bg-basil px-5 py-2 text-sm font-medium text-basil-contrast transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-quiet {
+    @apply inline-flex items-center justify-center rounded-full border border-rule px-4 py-1.5 text-sm transition-colors hover:border-ink disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-danger-quiet {
+    @apply inline-flex items-center justify-center rounded-full px-4 py-1.5 text-sm text-danger transition-colors hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-icon {
+    @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm text-muted transition-colors hover:bg-rule hover:text-ink disabled:pointer-events-none disabled:opacity-30;
+  }
+
+  .link-quiet {
+    @apply text-sm text-muted underline-offset-4 transition-colors hover:text-ink hover:underline;
+  }
+
+  .label {
+    @apply mb-1.5 block text-sm font-medium;
+  }
+
+  .field {
+    @apply w-full rounded-md border border-rule bg-transparent px-3 py-2 text-ink placeholder:text-muted;
+  }
+  .field[aria-invalid="true"] {
+    border-color: var(--danger);
+  }
+
+  .field-error {
+    @apply mt-1.5 text-sm text-danger;
+  }
+
+  .skeleton {
+    @apply rounded-md bg-rule animate-pulse motion-reduce:animate-none;
+  }
+
+  /* A short centered rule between dishes, like courses on a menu. */
+  .menu > li + li::before {
+    content: "";
+    display: block;
+    width: 2.5rem;
+    height: 1px;
+    margin: 2rem auto;
+    background: var(--rule);
+  }
 }

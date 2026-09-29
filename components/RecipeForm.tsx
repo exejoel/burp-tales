@@ -36,9 +36,6 @@ type RecipeFormProps = {
   pendingLabel: string;
 };
 
-const inputClass = "w-full border rounded-md px-3 py-2 text-gray-900 bg-white";
-const errorClass = "text-sm text-red-600 mt-1";
-
 function splitIngredients(text: string): string[] {
   return text
     .split("\n")
@@ -59,18 +56,18 @@ export default function RecipeForm({
   const errors = state.fieldErrors ?? {};
 
   return (
-    <form action={formAction} noValidate className="space-y-4">
+    <form action={formAction} noValidate className="space-y-8">
       <input type="hidden" name="sourceUrl" value={initialValues.sourceUrl} />
       <input type="hidden" name="imageUrl" value={initialValues.imageUrl} />
 
       {state.formError && (
-        <p role="alert" className="text-sm text-red-600 border border-red-600 rounded-md p-3">
+        <p role="alert" className="rounded-md border border-danger p-3 text-sm text-danger">
           {state.formError}
         </p>
       )}
 
       <div>
-        <label htmlFor="title" className="block text-sm font-medium mb-1">
+        <label htmlFor="title" className="label">
           Title
         </label>
         {/* After a form action finishes, React 19 resets uncontrolled fields
@@ -82,10 +79,10 @@ export default function RecipeForm({
           defaultValue={state.values?.title ?? initialValues.title}
           aria-invalid={errors.title ? true : undefined}
           aria-describedby={errors.title ? "title-error" : undefined}
-          className={inputClass}
+          className="field font-display text-2xl"
         />
         {errors.title && (
-          <p id="title-error" className={errorClass}>
+          <p id="title-error" className="field-error">
             {errors.title}
           </p>
         )}
@@ -97,39 +94,38 @@ export default function RecipeForm({
           initialIngredients={splitIngredients(initialValues.ingredients)}
         />
         {errors.ingredients && (
-          <p role="alert" className={errorClass}>
+          <p role="alert" className="field-error">
             {errors.ingredients}
           </p>
         )}
       </div>
 
       <div>
-        <label htmlFor="steps" className="block text-sm font-medium mb-1">
+        <label htmlFor="steps" className="label">
           Steps
         </label>
         <textarea
           id="steps"
           name="steps"
-          rows={6}
+          rows={8}
           defaultValue={state.values?.steps ?? initialValues.steps}
+          placeholder="One step per line"
           aria-invalid={errors.steps ? true : undefined}
           aria-describedby={errors.steps ? "steps-error" : undefined}
-          className={inputClass}
+          className="field leading-relaxed"
         />
         {errors.steps && (
-          <p id="steps-error" className={errorClass}>
+          <p id="steps-error" className="field-error">
             {errors.steps}
           </p>
         )}
       </div>
 
-      <button
-        type="submit"
-        disabled={isPending}
-        className="bg-black text-white px-4 py-2 rounded-md text-sm disabled:opacity-50"
-      >
-        {isPending ? pendingLabel : submitLabel}
-      </button>
+      <div className="border-t border-rule pt-6">
+        <button type="submit" disabled={isPending} className="btn-primary">
+          {isPending ? pendingLabel : submitLabel}
+        </button>
+      </div>
     </form>
   );
 }

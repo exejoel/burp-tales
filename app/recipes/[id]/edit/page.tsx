@@ -27,14 +27,13 @@ export default async function EditRecipePage({
   if (!recipe) notFound();
 
   return (
-    <main className="max-w-xl mx-auto p-8">
-      <Link
-        href={`/recipes/${recipe.id}`}
-        className="text-sm text-gray-500 hover:underline"
-      >
+    <main className="mx-auto w-full max-w-xl px-6 py-14">
+      <Link href={`/recipes/${recipe.id}`} className="link-quiet">
         ← Cancel
       </Link>
-      <h1 className="text-2xl font-semibold mt-2 mb-6">Edit recipe</h1>
+      <h1 className="mt-10 mb-10 font-display text-5xl font-medium tracking-tight">
+        Edit recipe
+      </h1>
 
       <RecipeForm
         action={updateRecipe.bind(null, recipe.id)}
