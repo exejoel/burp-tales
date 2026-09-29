@@ -1,9 +1,16 @@
 import { prisma } from "@/lib/prisma";
 import Link from "next/link";
+import RecipeList from "../../components/RecipeList";
 
+export const dynamic = "force-dynamic";
+
+// Server Component: talks to the database, ships no JavaScript of its own.
 export default async function RecipesPage() {
   const recipes = await prisma.recipe.findMany({
     orderBy: { createdAt: "desc" },
+    // Select only what the list needs. Everything passed to a client
+    // component is serialized into the page, so smaller is better.
+    select: { id: true, title: true, ingredients: true },
   });
 
   return (
@@ -19,23 +26,9 @@ export default async function RecipesPage() {
       </div>
 
       {recipes.length === 0 ? (
-        <p className="text-gray-500">No recipes yet — add your first one.</p>
+        <p className="text-gray-500">No recipes yet. Add your first one.</p>
       ) : (
-        <ul className="space-y-3">
-          {recipes.map((recipe) => (
-            <li key={recipe.id}>
-              <Link
-                href={`/recipes/${recipe.id}`}
-                className="block border rounded-lg p-4 hover:bg-gray-50"
-              >
-                <h2 className="font-medium">{recipe.title}</h2>
-                {recipe.rating && (
-                  <p className="text-sm text-gray-500">Rating: {recipe.rating}/5</p>
-                )}
-              </Link>
-            </li>
-          ))}
-        </ul>
+        <RecipeList recipes={recipes} />
       )}
     </main>
   );
