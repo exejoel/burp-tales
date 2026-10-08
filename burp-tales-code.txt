@@ -1,0 +1,3156 @@
+===== app/restaurants/actions.ts
+"use server";
+
+import { prisma } from "@/lib/prisma";
+import { redirect } from "next/navigation";
+
+// TODO: replace with the real logged-in user once auth is added
+const PLACEHOLDER_USER_ID = "cmtxs8n2l0000muiy9ezqjki9";
+
+export async function createRestaurantVisit(formData: FormData) {
+  const restaurantName = formData.get("restaurantName") as string;
+  const cuisine = formData.get("cuisine") as string;
+  const city = formData.get("city") as string;
+  const date = formData.get("date") as string;
+  const rating = formData.get("rating") as string;
+  const notes = formData.get("notes") as string;
+
+  if (!restaurantName || !date) {
+    throw new Error("Restaurant name and date are required");
+  }
+
+  // Find an existing restaurant with this name, or create a new one
+  let restaurant = await prisma.restaurant.findFirst({
+    where: { name: restaurantName },
+  });
+
+  if (!restaurant) {
+    restaurant = await prisma.restaurant.create({
+      data: { name: restaurantName, cuisine, city },
+    });
+  }
+
+  await prisma.visit.create({
+    data: {
+      userId: PLACEHOLDER_USER_ID,
+      restaurantId: restaurant.id,
+      date: new Date(date),
+      rating: rating ? parseInt(rating) : null,
+      notes,
+    },
+  });
+
+  redirect("/restaurants");
+}
+===== app/restaurants/new/page.tsx
+import { createRestaurantVisit } from "../actions";
+
+export default function NewVisitPage() {
+  return (
+    <main className="max-w-xl mx-auto p-8">
+      <h1 className="text-2xl font-semibold mb-6">Log a visit</h1>
+      <form action={createRestaurantVisit} className="space-y-4">
+        <div>
+          <label className="block text-sm font-medium mb-1">Restaurant name</label>
+          <input name="restaurantName" required className="w-full border rounded-md px-3 py-2" />
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">Cuisine</label>
+            <input name="cuisine" className="w-full border rounded-md px-3 py-2" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">City</label>
+            <input name="city" className="w-full border rounded-md px-3 py-2" />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">Date</label>
+            <input type="date" name="date" required className="w-full border rounded-md px-3 py-2" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">Rating (1-5)</label>
+            <input type="number" name="rating" min="1" max="5" className="w-full border rounded-md px-3 py-2" />
+          </div>
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">Notes</label>
+          <textarea name="notes" rows={4} className="w-full border rounded-md px-3 py-2" />
+        </div>
+        <button type="submit" className="bg-black text-white px-4 py-2 rounded-md text-sm">
+          Save visit
+        </button>
+      </form>
+    </main>
+  );
+}
+===== app/restaurants/page.tsx
+import { prisma } from "@/lib/prisma";
+import Link from "next/link";
+
+export default async function RestaurantsPage() {
+  const restaurants = await prisma.restaurant.findMany({
+    include: { visits: { orderBy: { date: "desc" }, take: 1 } },
+    orderBy: { name: "asc" },
+  });
+
+  return (
+    <main className="max-w-3xl mx-auto p-8">
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-2xl font-semibold">Restaurants</h1>
+        <Link
+          href="/restaurants/new"
+          className="bg-black text-white px-4 py-2 rounded-md text-sm"
+        >
+          Add visit
+        </Link>
+      </div>
+
+      {restaurants.length === 0 ? (
+        <p className="text-gray-500">No visits logged yet.</p>
+      ) : (
+        <ul className="space-y-3">
+          {restaurants.map((r) => (
+            <li key={r.id} className="border rounded-lg p-4">
+              <h2 className="font-medium">{r.name}</h2>
+              <p className="text-sm text-gray-500">
+                {r.cuisine} {r.city && `· ${r.city}`}
+              </p>
+              {r.visits[0]?.rating && (
+                <p className="text-sm text-gray-500">
+                  Latest rating: {r.visits[0].rating}/5
+                </p>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </main>
+  );
+}
+===== app/recipes/actions.ts
+"use server";
+
+import { prisma } from "@/lib/prisma";
+import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
+import { scrapeRecipeFromUrl } from "@/lib/scrapeRecipe";
+import { requireOwner } from "@/lib/owner";
+
+// The owner's row in the User table. Every recipe belongs to it, since
+// only the owner can write (see requireOwner below).
+const PLACEHOLDER_USER_ID = "cmtxs8n2l0000muiy9ezqjki9";
+
+// What a create or update action sends back to the form when it can't
+// save. On success the action redirects instead, so there's no success state.
+export type RecipeFormState = {
+  fieldErrors?: {
+    title?: string;
+    ingredients?: string;
+    steps?: string;
+  };
+  formError?: string;
+  // What the user submitted, so the form can show it again after an error.
+  values?: {
+    title: string;
+    steps: string;
+  };
+};
+
+type RecipeFields = {
+  title: string;
+  ingredients: string;
+  steps: string;
+};
+
+// Owner-only too: left open, anyone could make your server fetch any URL
+// they choose (server-side request forgery).
+export async function fetchRecipeFromUrl(url: string) {
+  await requireOwner();
+  return scrapeRecipeFromUrl(url);
+}
+
+// Not exported, so it's a plain helper, not a Server Action the
+// browser could call. Shared by create and update.
+function readRecipeFields(
+  formData: FormData
+):
+  | { ok: true; fields: RecipeFields }
+  | { ok: false; state: RecipeFormState } {
+  const rawTitle = String(formData.get("title") ?? "");
+  const rawSteps = String(formData.get("steps") ?? "");
+
+  const title = rawTitle.trim();
+  const ingredients = String(formData.get("ingredients") ?? "").trim();
+  const steps = rawSteps.trim();
+
+  const fieldErrors: NonNullable<RecipeFormState["fieldErrors"]> = {};
+  if (!title) fieldErrors.title = "Add a title.";
+  if (!ingredients) fieldErrors.ingredients = "Add at least one ingredient.";
+  if (!steps) fieldErrors.steps = "Add the steps.";
+
+  if (Object.keys(fieldErrors).length > 0) {
+    return {
+      ok: false,
+      state: { fieldErrors, values: { title: rawTitle, steps: rawSteps } },
+    };
+  }
+  return { ok: true, fields: { title, ingredients, steps } };
+}
+
+// With useActionState, React calls the action as (previousState, formData).
+export async function createRecipe(
+  _prevState: RecipeFormState,
+  formData: FormData
+): Promise<RecipeFormState> {
+  // Check first, before reading or validating anything.
+  await requireOwner();
+
+  const result = readRecipeFields(formData);
+  if (!result.ok) return result.state;
+
+  const { fields } = result;
+  const sourceUrl = String(formData.get("sourceUrl") ?? "");
+  const imageUrl = String(formData.get("imageUrl") ?? "");
+
+  try {
+    await prisma.recipe.create({
+      data: {
+        ...fields,
+        sourceUrl: sourceUrl || null,
+        imageUrl: imageUrl || null,
+        userId: PLACEHOLDER_USER_ID,
+      },
+    });
+  } catch (err) {
+    console.error("createRecipe failed:", err);
+    return {
+      formError: "Couldn't save the recipe. Try again.",
+      values: { title: fields.title, steps: fields.steps },
+    };
+  }
+
+  // Outside the try/catch on purpose: redirect() works by throwing a
+  // special error, and a catch block would swallow it.
+  revalidatePath("/recipes");
+  redirect("/recipes");
+}
+
+// The edit page binds the id: updateRecipe.bind(null, recipe.id).
+// Bound values travel through the browser, so treat `id` like any user
+// input: matching on userId too means you can only edit your own recipes.
+export async function updateRecipe(
+  id: string,
+  _prevState: RecipeFormState,
+  formData: FormData
+): Promise<RecipeFormState> {
+  // Check first, before reading or validating anything.
+  await requireOwner();
+
+  const result = readRecipeFields(formData);
+  if (!result.ok) return result.state;
+
+  const { fields } = result;
+
+  try {
+    await prisma.recipe.update({
+      where: { id, userId: PLACEHOLDER_USER_ID },
+      data: fields,
+    });
+  } catch (err) {
+    console.error("updateRecipe failed:", err);
+    // P2025 is Prisma's "record not found" code.
+    const notFound = (err as { code?: string }).code === "P2025";
+    return {
+      formError: notFound
+        ? "This recipe no longer exists. It may have been deleted."
+        : "Couldn't save your changes. Try again.",
+      values: { title: fields.title, steps: fields.steps },
+    };
+  }
+
+  revalidatePath("/recipes");
+  revalidatePath(`/recipes/${id}`);
+  redirect(`/recipes/${id}`);
+}
+
+// Same trust rule as updateRecipe: the id comes from the browser, so
+// matching on userId means you can only delete your own recipes.
+export async function deleteRecipe(id: string) {
+  await requireOwner();
+
+  await prisma.recipe.delete({
+    where: { id, userId: PLACEHOLDER_USER_ID },
+  });
+
+  revalidatePath("/recipes");
+  redirect("/recipes");
+}
+===== app/recipes/new/page.tsx
+import type { Metadata } from "next";
+import Link from "next/link";
+import { isOwner } from "@/lib/owner";
+import { SignInButton, SignOutButton } from "@/components/AuthButtons";
+
+export const dynamic = "force-dynamic";
+
+// Not linked from anywhere, and hidden from search engines.
+export const metadata: Metadata = {
+  title: "Sign in · Burp Tales",
+  robots: { index: false, follow: false },
+};
+
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string }>;
+}) {
+  const [{ error }, signedIn] = await Promise.all([searchParams, isOwner()]);
+
+  return (
+    <main className="mx-auto w-full max-w-sm px-6 py-24 text-center">
+      <h1 className="font-display text-4xl font-medium tracking-tight">
+        {signedIn ? "You're signed in" : "Owner sign in"}
+      </h1>
+
+      {signedIn ? (
+        <>
+          <p className="mt-3 text-muted">
+            You can add, edit, and delete recipes.
+          </p>
+          <div className="mt-8 flex justify-center gap-2">
+            <Link href="/recipes" className="btn-primary">
+              Go to recipes
+            </Link>
+            <SignOutButton />
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="mt-3 text-muted">
+            Editing is limited to the site owner.
+          </p>
+          {error && (
+            <p role="alert" className="mt-6 text-sm text-danger">
+              That account can&apos;t sign in here.
+            </p>
+          )}
+          <div className="mt-8 flex justify-center">
+            <SignInButton />
+          </div>
+        </>
+      )}
+    </main>
+  );
+}
+===== app/recipes/error.tsx
+"use client"; // Error boundaries must be Client Components
+
+import { useEffect } from "react";
+import Link from "next/link";
+
+// Catches errors anywhere under /recipes: the list, a recipe, the new and
+// edit pages, and Server Actions like deleteRecipe that throw.
+export default function RecipesError({
+  error,
+  unstable_retry,
+}: {
+  error: Error & { digest?: string };
+  unstable_retry: () => void;
+}) {
+  useEffect(() => {
+    // Swap this for an error reporting service later.
+    console.error(error);
+  }, [error]);
+
+  return (
+    <main className="mx-auto w-full max-w-xl px-6 py-24 text-center">
+      <h1 className="font-display text-4xl font-medium tracking-tight">
+        Couldn&apos;t load this page
+      </h1>
+      <p className="mt-3 text-muted">
+        The recipe database may be slow to respond. Try again in a moment.
+      </p>
+      <div className="mt-8 flex justify-center gap-2">
+        {/* unstable_retry re-fetches the server data and re-renders.
+            The older reset() only re-renders, so a failed database
+            query would just fail again. */}
+        <button type="button" onClick={() => unstable_retry()} className="btn-primary">
+          Try again
+        </button>
+        <Link href="/" className="btn-quiet">
+          Go home
+        </Link>
+      </div>
+    </main>
+  );
+}
+===== app/recipes/[id]/edit/page.tsx
+import { prisma } from "@/lib/prisma";
+import { notFound } from "next/navigation";
+import Link from "next/link";
+import RecipeForm from "@/components/RecipeForm";
+import { updateRecipe } from "../../actions";
+import { isOwner } from "@/lib/owner";
+
+export const dynamic = "force-dynamic";
+
+export default async function EditRecipePage({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  // Checked before the database query: visitors get a 404 and cost nothing.
+  if (!(await isOwner())) notFound();
+
+  const { id } = await params;
+  const recipe = await prisma.recipe.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      title: true,
+      ingredients: true,
+      steps: true,
+      sourceUrl: true,
+      imageUrl: true,
+    },
+  });
+
+  if (!recipe) notFound();
+
+  return (
+    <main className="mx-auto w-full max-w-xl px-6 py-14">
+      <Link href={`/recipes/${recipe.id}`} className="link-quiet">
+        ← Cancel
+      </Link>
+      <h1 className="mt-10 mb-10 font-display text-5xl font-medium tracking-tight">
+        Edit recipe
+      </h1>
+
+      <RecipeForm
+        action={updateRecipe.bind(null, recipe.id)}
+        initialValues={{
+          title: recipe.title,
+          ingredients: recipe.ingredients,
+          steps: recipe.steps,
+          sourceUrl: recipe.sourceUrl ?? "",
+          imageUrl: recipe.imageUrl ?? "",
+        }}
+        submitLabel="Save changes"
+        pendingLabel="Saving..."
+      />
+    </main>
+  );
+}
+===== app/recipes/[id]/loading.tsx
+// Next wraps this folder's page in <Suspense> and uses this as the
+// fallback. It's the nearest loading.tsx for /recipes/[id]/edit too.
+export default function RecipeDetailLoading() {
+  return (
+    <main className="mx-auto w-full max-w-xl px-6 py-14" role="status">
+      <span className="sr-only">Loading recipe</span>
+      <div className="skeleton h-4 w-24" />
+
+      <div className="mt-10 mb-12 flex flex-col items-center gap-6">
+        <div className="skeleton h-12 w-2/3" />
+        <div className="flex gap-2">
+          <div className="skeleton h-8 w-16 rounded-full" />
+          <div className="skeleton h-8 w-20 rounded-full" />
+        </div>
+      </div>
+
+      <div className="skeleton h-6 w-32 mb-4" />
+      <div className="space-y-3 mb-12">
+        <div className="skeleton h-5 w-full" />
+        <div className="skeleton h-5 w-full" />
+        <div className="skeleton h-5 w-full" />
+      </div>
+
+      <div className="skeleton h-6 w-20 mb-4" />
+      <div className="space-y-3">
+        <div className="skeleton h-5 w-full" />
+        <div className="skeleton h-5 w-5/6" />
+      </div>
+    </main>
+  );
+}
+===== app/recipes/[id]/page.tsx
+import { prisma } from "@/lib/prisma";
+import { notFound } from "next/navigation";
+import Link from "next/link";
+import DeleteRecipeButton from "@/components/DeleteRecipeButton";
+import { isOwner } from "@/lib/owner";
+
+export const dynamic = "force-dynamic";
+
+function toLines(text: string): string[] {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+// sourceUrl came from user input. Only link to real web pages, never
+// something like "javascript:...".
+function isWebUrl(value: string | null): value is string {
+  return !!value && /^https?:\/\//i.test(value);
+}
+
+export default async function RecipeDetailPage({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  const { id } = await params;
+  // Two independent lookups, so run them at the same time.
+  const [recipe, canEdit] = await Promise.all([
+    prisma.recipe.findUnique({ where: { id } }),
+    isOwner(),
+  ]);
+
+  if (!recipe) notFound();
+
+  const ingredients = toLines(recipe.ingredients);
+  const steps = toLines(recipe.steps);
+
+  return (
+    <main className="mx-auto w-full max-w-xl px-6 py-14">
+      <Link href="/recipes" className="link-quiet">
+        ← All recipes
+      </Link>
+
+      <header className="mt-10 mb-12 text-center">
+        <h1 className="font-display text-5xl font-medium tracking-tight text-balance">
+          {recipe.title}
+        </h1>
+        <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
+          {canEdit && (
+            <>
+              <Link href={`/recipes/${recipe.id}/edit`} className="btn-quiet">
+                Edit
+              </Link>
+              <DeleteRecipeButton recipeId={recipe.id} recipeTitle={recipe.title} />
+            </>
+          )}
+          {isWebUrl(recipe.sourceUrl) && (
+            <a
+              href={recipe.sourceUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="link-quiet px-2"
+            >
+              Original recipe
+            </a>
+          )}
+        </div>
+      </header>
+
+      <section aria-labelledby="ingredients-heading" className="mb-12">
+        <h2 id="ingredients-heading" className="font-display text-2xl font-medium mb-3">
+          Ingredients
+        </h2>
+        <ul className="border-t border-rule">
+          {ingredients.map((item, i) => (
+            // Index keys are fine here: this list never reorders or
+            // changes while the page is open.
+            <li key={i} className="border-b border-rule py-2.5">
+              {item}
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section aria-labelledby="steps-heading">
+        <h2 id="steps-heading" className="font-display text-2xl font-medium mb-4">
+          Steps
+        </h2>
+        <ol className="space-y-5">
+          {steps.map((step, i) => (
+            <li key={i} className="flex gap-4">
+              <span
+                aria-hidden="true"
+                className="w-6 shrink-0 font-display text-2xl leading-none text-basil"
+              >
+                {i + 1}
+              </span>
+              <p className="leading-relaxed">{step}</p>
+            </li>
+          ))}
+        </ol>
+      </section>
+    </main>
+  );
+}
+===== app/recipes/page.tsx
+import { Suspense } from "react";
+import { prisma } from "@/lib/prisma";
+import Link from "next/link";
+import RecipeList from "@/components/RecipeList";
+import { isOwner } from "@/lib/owner";
+
+export const dynamic = "force-dynamic";
+
+// The owner check only reads a cookie, so it's fast and the heading still
+// arrives right away. Only the part inside <Suspense> waits for the database.
+export default async function RecipesPage() {
+  const canEdit = await isOwner();
+
+  return (
+    <main className="mx-auto w-full max-w-xl px-6 py-14">
+      <header className="mb-10 text-center">
+        <h1 className="font-display text-5xl font-medium tracking-tight">
+          Recipes
+        </h1>
+        {canEdit && (
+          <Link href="/recipes/new" className="btn-primary mt-6">
+            Add recipe
+          </Link>
+        )}
+      </header>
+
+      <Suspense fallback={<RecipeListSkeleton />}>
+        <RecipeListData />
+      </Suspense>
+    </main>
+  );
+}
+
+// An async Server Component: React shows the Suspense fallback while this
+// awaits, then streams the finished list into the same HTML response.
+async function RecipeListData() {
+  const recipes = await prisma.recipe.findMany({
+    orderBy: { createdAt: "desc" },
+    // Select only what the list needs. Everything passed to a client
+    // component is serialized into the page, so smaller is better.
+    select: { id: true, title: true, ingredients: true },
+  });
+
+  if (recipes.length === 0) {
+    return (
+      <p className="text-center text-muted">
+        No recipes yet.
+      </p>
+    );
+  }
+  return <RecipeList recipes={recipes} />;
+}
+
+// Same layout as the real list, so nothing jumps when the data arrives.
+function RecipeListSkeleton() {
+  return (
+    <div role="status">
+      <span className="sr-only">Loading recipes</span>
+      <div className="skeleton mx-auto h-10 max-w-sm" />
+      <div className="h-5 mb-8" />
+      <ul className="menu">
+        {[0, 1, 2].map((i) => (
+          <li key={i} className="flex flex-col items-center gap-2">
+            <div className="skeleton h-8 w-48" />
+            <div className="skeleton h-4 w-64" />
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+===== app/layout.tsx
+import type { Metadata } from "next";
+import { Cormorant_Garamond, Instrument_Sans } from "next/font/google";
+import Link from "next/link";
+import NavLinks from "@/components/NavLinks";
+import { SignOutButton } from "@/components/AuthButtons";
+import { isOwner } from "@/lib/owner";
+import "./globals.css";
+
+// Display face for the wordmark and dish names; body face for everything else.
+const cormorant = Cormorant_Garamond({
+  variable: "--font-cormorant",
+  subsets: ["latin"],
+  weight: ["500", "600"],
+  style: ["normal", "italic"],
+});
+
+const instrumentSans = Instrument_Sans({
+  variable: "--font-instrument-sans",
+  subsets: ["latin"],
+});
+
+export const metadata: Metadata = {
+  title: "Burp Tales",
+  description: "A personal food journal: recipes and restaurant visits",
+};
+
+export default async function RootLayout({ children }: LayoutProps<"/">) {
+  // Only reads the encrypted session cookie, so it's cheap. Signing out
+  // calls router.refresh(), which re-renders this layout without the button.
+  const signedIn = await isOwner();
+
+  return (
+    <html
+      lang="en"
+      className={`${cormorant.variable} ${instrumentSans.variable} h-full antialiased`}
+    >
+      <body className="min-h-full flex flex-col">
+        <header className="border-b border-rule">
+          <nav className="mx-auto flex w-full max-w-3xl items-baseline justify-between px-6 py-5">
+            <Link
+              href="/"
+              className="font-display text-2xl font-semibold italic tracking-tight"
+            >
+              Burp Tales
+            </Link>
+            <div className="flex items-baseline gap-6">
+              <NavLinks />
+              {signedIn && (
+                <SignOutButton className="text-sm text-muted transition-colors hover:text-ink disabled:opacity-50" />
+              )}
+            </div>
+          </nav>
+        </header>
+        {children}
+      </body>
+    </html>
+  );
+}===== app/api/auth/[...all]/route.ts
+import { auth } from "@/lib/auth";
+import { toNextJsHandler } from "better-auth/next-js";
+
+// Handles the GitHub redirect flow, sign-out, and session requests
+// under /api/auth/*.
+export const { GET, POST } = toNextJsHandler(auth);
+===== app/page.tsx
+import { Suspense } from "react";
+import Link from "next/link";
+import { prisma } from "@/lib/prisma";
+
+export const dynamic = "force-dynamic";
+
+const sections = [
+  { href: "/recipes", title: "Recipes", description: "Dishes you cook at home" },
+  { href: "/restaurants", title: "Restaurants", description: "Places you've eaten out" },
+];
+
+// The cover of the menu: the name, the two sections, and what's new.
+// Like the recipes page, everything except the database part is sent
+// immediately.
+export default function Home() {
+  return (
+    <main className="mx-auto w-full max-w-xl px-6 py-20 text-center">
+      <h1 className="font-display text-6xl font-semibold italic tracking-tight sm:text-7xl">
+        Burp Tales
+      </h1>
+      <p className="mt-4 text-muted text-balance">
+        Recipes worth making again, and restaurants worth going back to.
+      </p>
+
+      <nav aria-label="Sections" className="mt-14 border-y border-rule">
+        <ul className="grid divide-y divide-rule sm:grid-cols-2 sm:divide-y-0 sm:divide-x">
+          {sections.map((section) => (
+            <li key={section.href}>
+              <Link href={section.href} className="group block px-4 py-8">
+                <span className="block font-display text-3xl font-medium transition-colors group-hover:text-basil">
+                  {section.title}
+                </span>
+                <span className="mt-1 block text-sm text-muted">
+                  {section.description}
+                </span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      </nav>
+
+      <Suspense fallback={<RecentRecipesSkeleton />}>
+        <RecentRecipes />
+      </Suspense>
+    </main>
+  );
+}
+
+async function RecentRecipes() {
+  const recipes = await prisma.recipe.findMany({
+    orderBy: { createdAt: "desc" },
+    take: 3,
+    select: { id: true, title: true },
+  });
+
+  // Nothing to show yet: leave the section out rather than show an
+  // empty heading. The Recipes link above is the way in.
+  if (recipes.length === 0) return null;
+
+  return (
+    <section aria-labelledby="recent-heading" className="mt-16">
+      <h2 id="recent-heading" className="mb-8 text-sm text-muted">
+        Recently added
+      </h2>
+      <ul className="menu">
+        {recipes.map((recipe) => (
+          <li key={recipe.id}>
+            <Link
+              href={`/recipes/${recipe.id}`}
+              className="font-display text-2xl font-medium text-balance transition-colors hover:text-basil"
+            >
+              {recipe.title}
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function RecentRecipesSkeleton() {
+  return (
+    <div role="status" className="mt-16 flex flex-col items-center gap-8">
+      <span className="sr-only">Loading recent recipes</span>
+      <div className="skeleton h-4 w-28" />
+      <div className="skeleton h-7 w-48" />
+      <div className="skeleton h-7 w-40" />
+    </div>
+  );
+}===== app/globals.css
+@import "tailwindcss";
+
+/* ---------- Theme ----------
+   A tasting-menu look: plain paper, dark ink, one basil accent.
+   Change a value here and it changes everywhere. */
+
+:root {
+  --paper: #fcfcfa;
+  --ink: #1c1d1a;
+  --muted: #676a62;
+  --rule: #e2e3de;
+  --basil: #2f5d3a;
+  --basil-contrast: #ffffff;
+  --danger: #b3261e;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #121412;
+    --ink: #ecede8;
+    --muted: #9b9e95;
+    --rule: #2b2e2a;
+    --basil: #9ccaa6;
+    --basil-contrast: #102015;
+    --danger: #f2837a;
+    color-scheme: dark;
+  }
+}
+
+/* Makes the tokens available as Tailwind classes:
+   bg-paper, text-ink, text-muted, border-rule, text-basil, font-display... */
+@theme inline {
+  --color-paper: var(--paper);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-rule: var(--rule);
+  --color-basil: var(--basil);
+  --color-basil-contrast: var(--basil-contrast);
+  --color-danger: var(--danger);
+  --font-sans: var(--font-instrument-sans);
+  --font-display: var(--font-cormorant);
+}
+
+@layer base {
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font-sans), system-ui, sans-serif;
+  }
+
+  /* One visible focus style for every link, button, and field. */
+  :focus-visible {
+    outline: 2px solid var(--basil);
+    outline-offset: 2px;
+  }
+}
+
+/* ---------- Shared building blocks ----------
+   Use these on the restaurant pages too, so both halves match. */
+
+@layer components {
+  .btn-primary {
+    @apply inline-flex items-center justify-center rounded-full bg-basil px-5 py-2 text-sm font-medium text-basil-contrast transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-quiet {
+    @apply inline-flex items-center justify-center rounded-full border border-rule px-4 py-1.5 text-sm transition-colors hover:border-ink disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-danger-quiet {
+    @apply inline-flex items-center justify-center rounded-full px-4 py-1.5 text-sm text-danger transition-colors hover:bg-danger/10 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-icon {
+    @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm text-muted transition-colors hover:bg-rule hover:text-ink disabled:pointer-events-none disabled:opacity-30;
+  }
+
+  .link-quiet {
+    @apply text-sm text-muted underline-offset-4 transition-colors hover:text-ink hover:underline;
+  }
+
+  .label {
+    @apply mb-1.5 block text-sm font-medium;
+  }
+
+  .field {
+    @apply w-full rounded-md border border-rule bg-transparent px-3 py-2 text-ink placeholder:text-muted;
+  }
+  .field[aria-invalid="true"] {
+    border-color: var(--danger);
+  }
+
+  .field-error {
+    @apply mt-1.5 text-sm text-danger;
+  }
+
+  .skeleton {
+    @apply rounded-md bg-rule animate-pulse motion-reduce:animate-none;
+  }
+
+  /* A short centered rule between dishes, like courses on a menu. */
+  .menu > li + li::before {
+    content: "";
+    display: block;
+    width: 2.5rem;
+    height: 1px;
+    margin: 2rem auto;
+    background: var(--rule);
+  }
+}
+===== app/login/page.tsx
+import type { Metadata } from "next";
+import Link from "next/link";
+import { isOwner } from "@/lib/owner";
+import { SignInButton, SignOutButton } from "@/components/AuthButtons";
+
+export const dynamic = "force-dynamic";
+
+// Not linked from anywhere, and hidden from search engines.
+export const metadata: Metadata = {
+  title: "Sign in · Burp Tales",
+  robots: { index: false, follow: false },
+};
+
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string }>;
+}) {
+  const [{ error }, signedIn] = await Promise.all([searchParams, isOwner()]);
+
+  return (
+    <main className="mx-auto w-full max-w-sm px-6 py-24 text-center">
+      <h1 className="font-display text-4xl font-medium tracking-tight">
+        {signedIn ? "You're signed in" : "Owner sign in"}
+      </h1>
+
+      {signedIn ? (
+        <>
+          <p className="mt-3 text-muted">
+            You can add, edit, and delete recipes.
+          </p>
+          <div className="mt-8 flex justify-center gap-2">
+            <Link href="/recipes" className="btn-primary">
+              Go to recipes
+            </Link>
+            <SignOutButton />
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="mt-3 text-muted">
+            Editing is limited to the site owner.
+          </p>
+          {error && (
+            <p role="alert" className="mt-6 text-sm text-danger">
+              That account can&apos;t sign in here.
+            </p>
+          )}
+          <div className="mt-8 flex justify-center">
+            <SignInButton />
+          </div>
+        </>
+      )}
+    </main>
+  );
+}===== components/NavLinks.tsx
+"use client";
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+
+const links = [
+  { href: "/recipes", label: "Recipes" },
+  { href: "/restaurants", label: "Restaurants" },
+];
+
+// Client Component only because usePathname needs the browser's URL.
+// The rest of the header stays on the server.
+export default function NavLinks() {
+  const pathname = usePathname();
+
+  return (
+    <ul className="flex gap-6">
+      {links.map(({ href, label }) => {
+        // startsWith, so /recipes/123/edit still highlights "Recipes".
+        const isActive = pathname === href || pathname.startsWith(`${href}/`);
+        return (
+          <li key={href}>
+            <Link
+              href={href}
+              aria-current={isActive ? "page" : undefined}
+              className={
+                isActive
+                  ? "text-sm text-ink underline decoration-basil decoration-2 underline-offset-8"
+                  : "text-sm text-muted transition-colors hover:text-ink"
+              }
+            >
+              {label}
+            </Link>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+===== components/RecipeList.tsx
+"use client";
+
+import { useState } from "react";
+import { useSearchParams } from "next/navigation";
+import Link from "next/link";
+
+// Only the fields the list needs. The server page selects exactly these,
+// so the client never receives the full recipe (steps, image, etc.).
+export type RecipeSummary = {
+  id: string;
+  title: string;
+  ingredients: string;
+};
+
+type RecipeListProps = {
+  recipes: RecipeSummary[];
+};
+
+// Write the search to the URL without adding history entries or
+// asking the server for anything. An empty search is left out, so an
+// unfiltered list stays at plain /recipes.
+function syncUrl(search: string) {
+  const params = new URLSearchParams(window.location.search);
+
+  if (search.trim()) params.set("q", search);
+  else params.delete("q");
+
+  const qs = params.toString();
+  window.history.replaceState(
+    null,
+    "",
+    qs ? `?${qs}` : window.location.pathname
+  );
+}
+
+// Pure helpers, outside the component: easy to read and easy to test.
+function matchesSearch(recipe: RecipeSummary, query: string): boolean {
+  if (query === "") return true;
+  return (
+    recipe.title.toLowerCase().includes(query) ||
+    recipe.ingredients.toLowerCase().includes(query)
+  );
+}
+
+// The line under each dish name, like a menu description:
+// "ghee, paneer, palak" or "flour, eggs, milk, butter, sugar, and 3 more".
+function ingredientPreview(text: string, max = 5): string {
+  const items = text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const shown = items.slice(0, max).join(", ");
+  const extra = items.length - max;
+  return extra > 0 ? `${shown}, and ${extra} more` : shown;
+}
+
+export default function RecipeList({ recipes }: RecipeListProps) {
+  const searchParams = useSearchParams();
+
+  // Lazy initializer: read the URL once, on the first render.
+  // This works on the server too, so a shared link like
+  // /recipes?q=egg arrives already filtered, with no flash.
+  const [search, setSearch] = useState(() => searchParams.get("q") ?? "");
+
+  // Derived state: calculated on every render, never stored.
+  const query = search.trim().toLowerCase();
+  const filteredRecipes = recipes.filter((recipe) =>
+    matchesSearch(recipe, query)
+  );
+
+  const isFiltering = query !== "";
+
+  // The event handler updates state and the URL together. No useEffect:
+  // the URL changes because the user did something, so the handler
+  // is the right place for it.
+  function handleSearchChange(value: string) {
+    setSearch(value);
+    syncUrl(value);
+  }
+
+  function clearSearch() {
+    setSearch("");
+    syncUrl("");
+  }
+
+  return (
+    <div>
+      <div className="mx-auto max-w-sm">
+        <input
+          type="search"
+          value={search}
+          onChange={(e) => handleSearchChange(e.target.value)}
+          placeholder="Search by dish or ingredient"
+          aria-label="Search recipes"
+          className="field"
+        />
+      </div>
+
+      {/* Always rendered, so screen readers are already watching it when
+          the count appears, and the list below doesn't jump. */}
+      <p aria-live="polite" className="mt-3 mb-8 h-5 text-center text-sm text-muted">
+        {isFiltering && `${filteredRecipes.length} of ${recipes.length} recipes`}
+      </p>
+
+      {filteredRecipes.length === 0 ? (
+        <div className="text-center">
+          <p className="text-muted">No recipes match “{search.trim()}”.</p>
+          <button type="button" onClick={clearSearch} className="btn-quiet mt-4">
+            Clear search
+          </button>
+        </div>
+      ) : (
+        <ul className="menu">
+          {filteredRecipes.map((recipe) => {
+            const preview = ingredientPreview(recipe.ingredients);
+            return (
+              <li key={recipe.id}>
+                <Link
+                  href={`/recipes/${recipe.id}`}
+                  className="group block text-center"
+                >
+                  <h2 className="font-display text-3xl font-medium text-balance transition-colors group-hover:text-basil">
+                    {recipe.title}
+                  </h2>
+                  {preview && (
+                    <p className="mt-1.5 text-sm text-muted text-balance">
+                      {preview}
+                    </p>
+                  )}
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+===== components/DeleteRecipeButton.tsx
+"use client";
+
+import { useTransition } from "react";
+import { deleteRecipe } from "@/app/recipes/actions";
+
+type DeleteRecipeButtonProps = {
+  recipeId: string;
+  recipeTitle: string;
+};
+
+// The only client code on the detail page. confirm() and onClick need the
+// browser, so just this button is a Client Component; the page stays on
+// the server.
+export default function DeleteRecipeButton({
+  recipeId,
+  recipeTitle,
+}: DeleteRecipeButtonProps) {
+  const [isPending, startTransition] = useTransition();
+
+  function handleClick() {
+    if (!window.confirm(`Delete "${recipeTitle}"? This can't be undone.`)) {
+      return;
+    }
+    // useTransition gives us isPending for a Server Action that isn't
+    // attached to a <form>, where useFormStatus wouldn't work.
+    startTransition(async () => {
+      await deleteRecipe(recipeId);
+    });
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      disabled={isPending}
+      className="btn-danger-quiet"
+    >
+      {isPending ? "Deleting..." : "Delete"}
+    </button>
+  );
+}
+===== components/NewRecipeForm.tsx
+"use client";
+
+import { useState, useTransition } from "react";
+import Link from "next/link";
+import { createRecipe, fetchRecipeFromUrl } from "@/app/recipes/actions";
+import RecipeForm, { type RecipeFormValues } from "@/components/RecipeForm";
+
+// The interactive part of the Add page. The page itself (a Server
+// Component) checks that you're the owner before rendering this.
+export default function NewRecipeForm() {
+  const [url, setUrl] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [isFetching, startFetching] = useTransition();
+
+  // Values from the last URL fetch, used to seed the form.
+  const [fetched, setFetched] = useState<RecipeFormValues | undefined>();
+  // Changing this number changes the form's `key`, so React mounts a
+  // fresh form (and a fresh ingredient editor) seeded with `fetched`.
+  const [fetchCount, setFetchCount] = useState(0);
+
+  function handleFetch() {
+    setError(null);
+    if (!url) return;
+    startFetching(async () => {
+      try {
+        const data = await fetchRecipeFromUrl(url);
+        setFetched({
+          title: data.title,
+          ingredients: data.ingredients ?? "",
+          steps: data.steps ?? "",
+          sourceUrl: url,
+          imageUrl: data.imageUrl || "",
+        });
+        setFetchCount((count) => count + 1);
+
+        if (!data.ingredients && !data.steps) {
+          setError(
+            "No structured recipe data found on this page. The title and image were filled in; add the ingredients and steps yourself."
+          );
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Couldn't fetch that URL.");
+      }
+    });
+  }
+
+  return (
+    <main className="mx-auto w-full max-w-xl px-6 py-14">
+      <Link href="/recipes" className="link-quiet">
+        ← All recipes
+      </Link>
+      <h1 className="mt-10 mb-10 font-display text-5xl font-medium tracking-tight">
+        Add a recipe
+      </h1>
+
+      <section className="mb-10 border-b border-rule pb-10">
+        <label htmlFor="recipe-url" className="label">
+          Start from a link (optional)
+        </label>
+        <div className="flex gap-2">
+          <input
+            id="recipe-url"
+            type="url"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="https://..."
+            aria-describedby="recipe-url-hint"
+            className="field min-w-0 flex-1"
+          />
+          <button
+            type="button"
+            onClick={handleFetch}
+            disabled={isFetching || !url}
+            className="btn-quiet shrink-0"
+          >
+            {isFetching ? "Fetching..." : "Fetch"}
+          </button>
+        </div>
+        <p id="recipe-url-hint" className="mt-1.5 text-sm text-muted">
+          Fills in the title, ingredients, and steps when the page lists them.
+        </p>
+        {error && (
+          <p role="alert" className="field-error">
+            {error}
+          </p>
+        )}
+      </section>
+
+      <RecipeForm
+        key={fetchCount}
+        action={createRecipe}
+        initialValues={fetched}
+        submitLabel="Save recipe"
+        pendingLabel="Saving..."
+      />
+    </main>
+  );
+}
+===== components/AuthButtons.tsx
+"use client";
+
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { authClient } from "@/lib/auth-client";
+
+export function SignInButton() {
+  const [isRedirecting, setIsRedirecting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleClick() {
+    setIsRedirecting(true);
+    setError(null);
+    // On success the browser leaves for GitHub, so this only returns
+    // when something went wrong before the redirect.
+    const result = await authClient.signIn.social({
+      provider: "github",
+      callbackURL: "/recipes",
+      errorCallbackURL: "/login",
+    });
+    if (result.error) {
+      setError("Couldn't start sign-in. Try again.");
+      setIsRedirecting(false);
+    }
+  }
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={handleClick}
+        disabled={isRedirecting}
+        className="btn-primary"
+      >
+        {isRedirecting ? "Redirecting to GitHub..." : "Sign in with GitHub"}
+      </button>
+      {error && (
+        <p role="alert" className="field-error">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+export function SignOutButton({
+  className = "btn-quiet",
+}: {
+  className?: string;
+}) {
+  const router = useRouter();
+  const [isSigningOut, setIsSigningOut] = useState(false);
+
+  async function handleClick() {
+    setIsSigningOut(true);
+    await authClient.signOut();
+    // refresh() re-renders the Server Components, so the owner-only
+    // buttons disappear right away.
+    router.push("/");
+    router.refresh();
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      disabled={isSigningOut}
+      className={className}
+    >
+      {isSigningOut ? "Signing out..." : "Sign out"}
+    </button>
+  );
+}===== components/IngredientEditors.tsx
+"use client";
+
+import { useReducer } from "react";
+
+type Ingredient = {
+  id: string;
+  text: string;
+};
+
+type Action =
+  | { type: "added"; id: string }
+  | { type: "changed"; id: string; text: string }
+  | { type: "removed"; id: string }
+  | { type: "moved"; id: string; direction: "up" | "down" };
+
+type IngredientEditorProps = {
+  // Used only to seed the list when the editor first mounts.
+  // To load new ingredients later, the parent changes this component's `key`.
+  initialIngredients?: string[];
+};
+
+// ---------- Reducer ----------
+// A pure function: (current state, action) => next state.
+// No side effects here: no fetches, no random IDs, no mutation.
+
+function ingredientsReducer(state: Ingredient[], action: Action): Ingredient[] {
+  switch (action.type) {
+    case "added":
+      return [...state, { id: action.id, text: "" }];
+
+    case "changed":
+      return state.map((item) =>
+        item.id === action.id ? { ...item, text: action.text } : item
+      );
+
+    case "removed":
+      return state.filter((item) => item.id !== action.id);
+
+    case "moved": {
+      const index = state.findIndex((item) => item.id === action.id);
+      const target = action.direction === "up" ? index - 1 : index + 1;
+      if (index === -1 || target < 0 || target >= state.length) return state;
+
+      const next = [...state];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    }
+
+    default: {
+      // Exhaustiveness check: if you add a new action type and forget
+      // to handle it above, this line becomes a type error.
+      const unhandled: never = action;
+      return unhandled;
+    }
+  }
+}
+
+// Lazy initializer: runs once, on the first render only.
+// Fixed IDs (not random ones) keep the server and browser renders identical.
+function createInitialState(initialIngredients: string[]): Ingredient[] {
+  if (initialIngredients.length === 0) {
+    return [{ id: "initial-0", text: "" }];
+  }
+  return initialIngredients.map((text, i) => ({ id: `initial-${i}`, text }));
+}
+
+// ---------- Component ----------
+
+export default function IngredientEditor({
+  initialIngredients = [],
+}: IngredientEditorProps) {
+  const [ingredients, dispatch] = useReducer(
+    ingredientsReducer,
+    initialIngredients,
+    createInitialState
+  );
+
+  // Derived state: computed from `ingredients` on every render,
+  // never stored separately, so it can never get out of sync.
+  const serialized = ingredients
+    .map((item) => item.text.trim())
+    .filter(Boolean)
+    .join("\n");
+
+  return (
+    <fieldset>
+      <legend className="label">Ingredients</legend>
+
+      {/* This is what the form actually submits, in the same
+          newline-separated format your server action already expects. */}
+      <input type="hidden" name="ingredients" value={serialized} />
+
+      <ul className="space-y-2">
+        {ingredients.map((item, index) => (
+          <li key={item.id} className="flex items-center gap-1">
+            <input
+              type="text"
+              value={item.text}
+              onChange={(e) =>
+                dispatch({ type: "changed", id: item.id, text: e.target.value })
+              }
+              placeholder="e.g. 2 cups flour"
+              aria-label={`Ingredient ${index + 1}`}
+              className="field min-w-0 flex-1 mr-1"
+            />
+
+            {/* type="button" matters: the default inside a form is
+                "submit", which would submit the form on every click. */}
+            <button
+              type="button"
+              onClick={() =>
+                dispatch({ type: "moved", id: item.id, direction: "up" })
+              }
+              disabled={index === 0}
+              aria-label={`Move ingredient ${index + 1} up`}
+              className="btn-icon"
+            >
+              ↑
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                dispatch({ type: "moved", id: item.id, direction: "down" })
+              }
+              disabled={index === ingredients.length - 1}
+              aria-label={`Move ingredient ${index + 1} down`}
+              className="btn-icon"
+            >
+              ↓
+            </button>
+            <button
+              type="button"
+              onClick={() => dispatch({ type: "removed", id: item.id })}
+              disabled={ingredients.length === 1}
+              aria-label={`Remove ingredient ${index + 1}`}
+              className="btn-icon"
+            >
+              ✕
+            </button>
+          </li>
+        ))}
+      </ul>
+
+      <button
+        type="button"
+        // The ID is created here, in the event handler, not inside the
+        // reducer, which keeps the reducer pure.
+        onClick={() => dispatch({ type: "added", id: crypto.randomUUID() })}
+        className="btn-quiet mt-3"
+      >
+        Add ingredient
+      </button>
+    </fieldset>
+  );
+}
+===== components/RecipeForm.tsx
+"use client";
+
+import { useActionState } from "react";
+import IngredientEditor from "@/components/IngredientEditors";
+import type { RecipeFormState } from "@/app/recipes/actions";
+
+// Same shape and format as the database: ingredients is one
+// newline-separated string, so both pages can pass data straight through.
+export type RecipeFormValues = {
+  title: string;
+  ingredients: string;
+  steps: string;
+  sourceUrl: string;
+  imageUrl: string;
+};
+
+const emptyValues: RecipeFormValues = {
+  title: "",
+  ingredients: "",
+  steps: "",
+  sourceUrl: "",
+  imageUrl: "",
+};
+
+const initialState: RecipeFormState = {};
+
+type RecipeFormProps = {
+  action: (
+    prevState: RecipeFormState,
+    formData: FormData
+  ) => Promise<RecipeFormState>;
+  // Read only when the form first mounts. To load different values,
+  // the parent changes this component's `key` (same pattern as the editor).
+  initialValues?: RecipeFormValues;
+  submitLabel: string;
+  pendingLabel: string;
+};
+
+function splitIngredients(text: string): string[] {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+export default function RecipeForm({
+  action,
+  initialValues = emptyValues,
+  submitLabel,
+  pendingLabel,
+}: RecipeFormProps) {
+  // state: whatever the action last returned ({} until the first submit).
+  // formAction: goes on <form action>, so React passes `state` in as prevState.
+  // isPending: true while the action runs, so no separate useFormStatus button.
+  const [state, formAction, isPending] = useActionState(action, initialState);
+  const errors = state.fieldErrors ?? {};
+
+  return (
+    <form action={formAction} noValidate className="space-y-8">
+      <input type="hidden" name="sourceUrl" value={initialValues.sourceUrl} />
+      <input type="hidden" name="imageUrl" value={initialValues.imageUrl} />
+
+      {state.formError && (
+        <p role="alert" className="rounded-md border border-danger p-3 text-sm text-danger">
+          {state.formError}
+        </p>
+      )}
+
+      <div>
+        <label htmlFor="title" className="label">
+          Title
+        </label>
+        {/* After a form action finishes, React 19 resets uncontrolled fields
+            to their defaultValue. Using the submitted value as the default
+            means an error doesn't wipe out what the user typed. */}
+        <input
+          id="title"
+          name="title"
+          defaultValue={state.values?.title ?? initialValues.title}
+          aria-invalid={errors.title ? true : undefined}
+          aria-describedby={errors.title ? "title-error" : undefined}
+          className="field font-display text-2xl"
+        />
+        {errors.title && (
+          <p id="title-error" className="field-error">
+            {errors.title}
+          </p>
+        )}
+      </div>
+
+      {/* The editor keeps its own state, so the reset doesn't touch it. */}
+      <div>
+        <IngredientEditor
+          initialIngredients={splitIngredients(initialValues.ingredients)}
+        />
+        {errors.ingredients && (
+          <p role="alert" className="field-error">
+            {errors.ingredients}
+          </p>
+        )}
+      </div>
+
+      <div>
+        <label htmlFor="steps" className="label">
+          Steps
+        </label>
+        <textarea
+          id="steps"
+          name="steps"
+          rows={8}
+          defaultValue={state.values?.steps ?? initialValues.steps}
+          placeholder="One step per line"
+          aria-invalid={errors.steps ? true : undefined}
+          aria-describedby={errors.steps ? "steps-error" : undefined}
+          className="field leading-relaxed"
+        />
+        {errors.steps && (
+          <p id="steps-error" className="field-error">
+            {errors.steps}
+          </p>
+        )}
+      </div>
+
+      <div className="border-t border-rule pt-6">
+        <button type="submit" disabled={isPending} className="btn-primary">
+          {isPending ? pendingLabel : submitLabel}
+        </button>
+      </div>
+    </form>
+  );
+}
+===== lib/prisma.ts
+import { PrismaClient } from "@prisma/client";
+
+const globalForPrisma = globalThis as unknown as { prisma: PrismaClient };
+
+export const prisma = globalForPrisma.prisma || new PrismaClient();
+
+if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
+===== lib/scrapeRecipe.ts
+import * as cheerio from "cheerio";
+
+interface ScrapedRecipe {
+  title: string;
+  imageUrl: string | null;
+  ingredients: string;
+  steps: string;
+}
+
+export async function scrapeRecipeFromUrl(url: string): Promise<ScrapedRecipe> {
+  const res = await fetch(url, {
+    headers: { "User-Agent": "Mozilla/5.0 (compatible; BurpTalesBot/1.0)" },
+  });
+  if (!res.ok) throw new Error(`Failed to fetch page (status ${res.status})`);
+
+  const html = await res.text();
+  const $ = cheerio.load(html);
+
+  // Most recipe sites embed structured "Recipe" data as JSON-LD for Google.
+  // We look for that first since it's far more reliable than guessing from HTML.
+  let recipeData: any = null;
+  $('script[type="application/ld+json"]').each((_, el) => {
+    if (recipeData) return;
+    try {
+      const json = JSON.parse($(el).text());
+      const candidates = Array.isArray(json)
+        ? json
+        : json["@graph"]
+        ? json["@graph"]
+        : [json];
+      const found = candidates.find((item: any) => {
+        const type = item["@type"];
+        return type === "Recipe" || (Array.isArray(type) && type.includes("Recipe"));
+      });
+      if (found) recipeData = found;
+    } catch {
+      // Some sites ship malformed JSON-LD — just skip it
+    }
+  });
+
+  if (recipeData) {
+    const ingredients: string[] = recipeData.recipeIngredient || [];
+    const rawInstructions = recipeData.recipeInstructions || [];
+    const instructions: string[] = Array.isArray(rawInstructions)
+      ? rawInstructions.map((step: any) =>
+          typeof step === "string" ? step : step.text || ""
+        )
+      : [String(rawInstructions)];
+
+    return {
+      title: recipeData.name || $("title").text() || "Untitled recipe",
+      imageUrl: Array.isArray(recipeData.image)
+        ? recipeData.image[0]
+        : recipeData.image?.url || recipeData.image || null,
+      ingredients: ingredients.join("\n"),
+      steps: instructions.join("\n"),
+    };
+  }
+
+  // Fallback if the site has no structured recipe data at all
+  return {
+    title: $("title").text() || "Untitled recipe",
+    imageUrl: $('meta[property="og:image"]').attr("content") || null,
+    ingredients: "",
+    steps: "",
+  };
+}
+===== lib/owner.ts
+import { headers } from "next/headers";
+import { auth } from "@/lib/auth";
+
+// Sign-in only succeeds for the owner's GitHub account (see lib/auth.ts),
+// so any valid session belongs to the owner. With the stateless setup,
+// this reads an encrypted cookie; it doesn't touch the database.
+export async function isOwner(): Promise<boolean> {
+  const session = await auth.api.getSession({ headers: await headers() });
+  return session !== null;
+}
+
+// Call at the top of every Server Action that writes or does anything
+// costly. Server Actions are public endpoints: hiding a button doesn't
+// stop someone from calling the action directly.
+export async function requireOwner(): Promise<void> {
+  if (!(await isOwner())) {
+    throw new Error("Not authorized");
+  }
+}
+===== lib/auth.ts
+import { betterAuth } from "better-auth";
+import { nextCookies } from "better-auth/next-js";
+
+// Stateless setup: no `database` option, so Better Auth keeps the session
+// in an encrypted cookie instead of a table. There's only one user (you),
+// so there's nothing worth storing.
+export const auth = betterAuth({
+  socialProviders: {
+    github: {
+      clientId: process.env.GITHUB_CLIENT_ID as string,
+      clientSecret: process.env.GITHUB_CLIENT_SECRET as string,
+    },
+  },
+  session: {
+    cookieCache: {
+      enabled: true,
+      maxAge: 60 * 60 * 24 * 7, // stay signed in for 7 days
+      strategy: "jwe", // encrypted, not just signed
+      refreshCache: true, // extend the 7 days while you keep using the site
+    },
+  },
+  user: {
+    // The gate: runs on every GitHub sign-in, before a session exists.
+    // Only your GitHub account gets through. If OWNER_GITHUB_ID is missing,
+    // nothing matches and everyone is refused, so a config mistake fails
+    // closed instead of open.
+    validateUserInfo: ({ source }) => {
+      const githubId = source.oauth?.profile?.id;
+      if (
+        source.oauth?.providerId !== "github" ||
+        String(githubId) !== process.env.OWNER_GITHUB_ID
+      ) {
+        return {
+          error: "not_owner",
+          errorDescription: "Only the site owner can sign in.",
+        };
+      }
+    },
+  },
+  plugins: [nextCookies()], // must stay last in the list
+});
+===== lib/auth-client.ts
+import { createAuthClient } from "better-auth/react";
+
+// Browser-side helper for starting sign-in and sign-out.
+export const authClient = createAuthClient();
+===== prisma/schema.prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  recipes   Recipe[]
+  visits    Visit[]
+  createdAt DateTime @default(now())
+}
+
+model Recipe {
+  id            String    @id @default(cuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id])
+  title         String
+  sourceUrl     String?
+  imageUrl      String?
+  ingredients   String    // newline-separated text for now; can normalize into a table later
+  steps         String    // same — plain text for now
+  tags          Tag[]     @relation("RecipeTags")
+  rating        Int?
+  cookedCount   Int       @default(0)
+  lastCookedAt  DateTime?
+  createdAt     DateTime  @default(now())
+}
+
+model Restaurant {
+  id      String  @id @default(cuid())
+  name    String
+  cuisine String?
+  city    String?
+  address String?
+  visits  Visit[]
+}
+
+model Visit {
+  id           String     @id @default(cuid())
+  userId       String
+  user         User       @relation(fields: [userId], references: [id])
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+  date         DateTime
+  rating       Int?
+  notes        String?
+  dishesTried  String?    // newline-separated text for now
+  createdAt    DateTime   @default(now())
+}
+
+model Tag {
+  id      String   @id @default(cuid())
+  name    String
+  type    String   // "recipe" or "restaurant"
+  recipes Recipe[] @relation("RecipeTags")
+
+  @@unique([name, type])
+}
+===== prisma/seed.ts
+/**
+ * Seeds the database with demo recipes and restaurant visits for the
+ * showcase site.
+ *
+ * Run with:  npm run seed
+ *
+ * Safe to run more than once: it first deletes the demo rows it created
+ * last time (matched by recipe title and restaurant name), then inserts
+ * them again. Anything you added yourself is left alone.
+ */
+import { PrismaClient } from "@prisma/client";
+import { recipes } from "./seed-data/recipes";
+import { restaurants } from "./seed-data/restaurants";
+
+const prisma = new PrismaClient();
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function daysAgo(days: number): Date {
+  return new Date(Date.now() - days * DAY_MS);
+}
+
+// Recipes and visits need a user. The app still uses a placeholder user,
+// and edits only match recipes owned by it, so the seed must use the
+// same one. Set SEED_USER_ID to that id if you have more than one user.
+async function getUserId(): Promise<string> {
+  const fromEnv = process.env.SEED_USER_ID;
+  if (fromEnv) {
+    const user = await prisma.user.findUnique({ where: { id: fromEnv } });
+    if (!user) throw new Error(`SEED_USER_ID ${fromEnv} doesn't match any user`);
+    return user.id;
+  }
+
+  const firstUser = await prisma.user.findFirst({ orderBy: { createdAt: "asc" } });
+  if (firstUser) return firstUser.id;
+
+  const created = await prisma.user.create({
+    data: { email: "demo@burptales.dev", name: "Demo Cook" },
+  });
+  return created.id;
+}
+
+async function clearDemoData(userId: string) {
+  const recipeTitles = recipes.map((r) => r.title);
+  const restaurantNames = restaurants.map((r) => r.name);
+
+  // Recipe-tag links are removed automatically with the recipe.
+  const deletedRecipes = await prisma.recipe.deleteMany({
+    where: { userId, title: { in: recipeTitles } },
+  });
+
+  // Visits point at restaurants, so they go first.
+  await prisma.visit.deleteMany({
+    where: { restaurant: { name: { in: restaurantNames } } },
+  });
+  const deletedRestaurants = await prisma.restaurant.deleteMany({
+    where: { name: { in: restaurantNames } },
+  });
+
+  console.log(
+    `Cleared ${deletedRecipes.count} old demo recipes and ${deletedRestaurants.count} old demo restaurants.`
+  );
+}
+
+async function seedRecipes(userId: string) {
+  // One at a time on purpose: two recipes creating the same new tag in
+  // parallel would collide on the tag's unique (name, type) index.
+  for (const [index, recipe] of recipes.entries()) {
+    await prisma.recipe.create({
+      data: {
+        userId,
+        title: recipe.title,
+        ingredients: recipe.ingredients.join("\n"),
+        steps: recipe.steps.join("\n"),
+        cookedCount: recipe.cookedCount ?? 0,
+        lastCookedAt:
+          recipe.lastCookedDaysAgo !== undefined
+            ? daysAgo(recipe.lastCookedDaysAgo)
+            : null,
+        // Spread out over the last two months, so "recent recipes"
+        // and the default newest-first sort look natural.
+        createdAt: daysAgo(index * 2),
+        tags: {
+          connectOrCreate: recipe.tags.map((name) => ({
+            where: { name_type: { name, type: "recipe" } },
+            create: { name, type: "recipe" },
+          })),
+        },
+      },
+    });
+  }
+  console.log(`Created ${recipes.length} recipes.`);
+}
+
+async function seedRestaurants(userId: string) {
+  let visitCount = 0;
+  for (const restaurant of restaurants) {
+    await prisma.restaurant.create({
+      data: {
+        name: restaurant.name,
+        cuisine: restaurant.cuisine,
+        city: restaurant.city,
+        visits: {
+          create: restaurant.visits.map((visit) => ({
+            userId,
+            date: new Date(`${visit.date}T19:00:00Z`),
+            rating: visit.rating,
+            notes: visit.notes,
+            dishesTried: visit.dishesTried.join("\n"),
+          })),
+        },
+      },
+    });
+    visitCount += restaurant.visits.length;
+  }
+  console.log(`Created ${restaurants.length} restaurants with ${visitCount} visits.`);
+}
+
+async function main() {
+  const userId = await getUserId();
+  console.log(`Seeding demo data for user ${userId}`);
+  await clearDemoData(userId);
+  await seedRecipes(userId);
+  await seedRestaurants(userId);
+  console.log("Done.");
+}
+
+main()
+  .catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  })
+  .finally(() => prisma.$disconnect());
+===== prisma/seed-data/recipes.ts
+// Demo recipes for the showcase site. All written for this project.
+// ingredients and steps are arrays here and joined with "\n" by the seed,
+// matching how the app stores them.
+
+export type SeedRecipe = {
+  title: string;
+  ingredients: string[];
+  steps: string[];
+  tags: string[];
+  cookedCount?: number;
+  lastCookedDaysAgo?: number;
+};
+
+export const recipes: SeedRecipe[] = [
+  {
+    title: "Weeknight Chicken Tikka Skewers",
+    ingredients: [
+      "1.5 lb boneless chicken thighs, cut into chunks",
+      "3/4 cup plain yogurt",
+      "1 tbsp lemon juice",
+      "2 tsp garam masala",
+      "1 tsp ground cumin",
+      "1 tsp Kashmiri chili powder",
+      "3 garlic cloves, grated",
+      "1 tbsp grated ginger",
+      "1 tsp salt",
+      "1 red onion, cut into wedges",
+    ],
+    steps: [
+      "Stir the yogurt, lemon juice, spices, garlic, ginger, and salt together in a bowl.",
+      "Add the chicken, coat it well, and marinate for at least 30 minutes or up to overnight.",
+      "Thread the chicken and onion onto skewers.",
+      "Grill or broil on high for 10 to 12 minutes, turning once, until charred at the edges and cooked through.",
+      "Rest for 5 minutes and serve with naan, sliced onion, and lemon wedges.",
+    ],
+    tags: ["indian", "grill", "weeknight"],
+    cookedCount: 6,
+    lastCookedDaysAgo: 4,
+  },
+  {
+    title: "Palak Paneer",
+    ingredients: [
+      "10 oz fresh spinach",
+      "8 oz paneer, cubed",
+      "1 onion, finely chopped",
+      "2 tomatoes, chopped",
+      "1 green chili",
+      "3 garlic cloves",
+      "1 tbsp ginger",
+      "1 tsp cumin seeds",
+      "1 tsp garam masala",
+      "2 tbsp ghee",
+      "3 tbsp cream",
+      "Salt to taste",
+    ],
+    steps: [
+      "Blanch the spinach for 1 minute, plunge into ice water, then blend into a smooth puree with the green chili.",
+      "Sear the paneer in 1 tbsp ghee until golden on two sides, then set aside.",
+      "Heat the remaining ghee, add the cumin seeds, then the onion, and cook until soft and golden.",
+      "Add the garlic, ginger, and tomatoes and cook until the tomatoes break down.",
+      "Stir in the spinach puree and garam masala, simmer for 5 minutes, then add the cream and paneer.",
+      "Season with salt and serve with rice or roti.",
+    ],
+    tags: ["indian", "vegetarian"],
+    cookedCount: 4,
+    lastCookedDaysAgo: 12,
+  },
+  {
+    title: "Fluffy Buttermilk Pancakes",
+    ingredients: [
+      "2 cups all-purpose flour",
+      "2 tbsp sugar",
+      "2 tsp baking powder",
+      "1/2 tsp baking soda",
+      "1/2 tsp salt",
+      "2 cups buttermilk",
+      "2 eggs",
+      "3 tbsp melted butter",
+    ],
+    steps: [
+      "Whisk the dry ingredients together in a large bowl.",
+      "In another bowl, whisk the buttermilk, eggs, and melted butter.",
+      "Pour the wet ingredients into the dry and stir just until combined. Lumps are fine.",
+      "Let the batter rest for 5 minutes while the pan heats over medium.",
+      "Cook 1/4 cup portions until bubbles form and the edges look set, then flip and cook 1 more minute.",
+    ],
+    tags: ["breakfast", "vegetarian"],
+    cookedCount: 9,
+    lastCookedDaysAgo: 6,
+  },
+  {
+    title: "Lemon Garlic Shrimp Pasta",
+    ingredients: [
+      "12 oz linguine",
+      "1 lb shrimp, peeled and deveined",
+      "4 tbsp butter",
+      "5 garlic cloves, sliced",
+      "1/2 tsp red pepper flakes",
+      "1 lemon, zested and juiced",
+      "1/2 cup reserved pasta water",
+      "1/4 cup chopped parsley",
+      "Salt and black pepper",
+    ],
+    steps: [
+      "Cook the linguine in well-salted water until al dente, reserving some pasta water before draining.",
+      "Melt 2 tbsp butter in a large skillet and cook the shrimp for about 1 minute per side. Remove.",
+      "Add the remaining butter, garlic, and pepper flakes and cook until the garlic is fragrant.",
+      "Add the lemon juice, zest, and a splash of pasta water, then toss in the pasta.",
+      "Return the shrimp, add parsley, and loosen with more pasta water as needed.",
+    ],
+    tags: ["pasta", "seafood", "weeknight"],
+    cookedCount: 5,
+    lastCookedDaysAgo: 20,
+  },
+  {
+    title: "Black Bean Tacos with Lime Slaw",
+    ingredients: [
+      "2 cans black beans, drained",
+      "1 tsp cumin",
+      "1 tsp smoked paprika",
+      "2 cups shredded cabbage",
+      "2 limes",
+      "1/4 cup cilantro, chopped",
+      "8 corn tortillas",
+      "1 avocado, sliced",
+      "Crumbled cotija (optional)",
+    ],
+    steps: [
+      "Warm the beans with the cumin, paprika, a splash of water, and salt, mashing about half of them.",
+      "Toss the cabbage with the juice of one lime, cilantro, and a pinch of salt.",
+      "Char the tortillas directly over a gas flame or in a dry pan.",
+      "Fill each tortilla with beans, slaw, avocado, and cotija. Serve with lime wedges.",
+    ],
+    tags: ["mexican", "vegetarian", "weeknight"],
+    cookedCount: 7,
+    lastCookedDaysAgo: 9,
+  },
+  {
+    title: "Miso Glazed Salmon",
+    ingredients: [
+      "4 salmon fillets",
+      "3 tbsp white miso",
+      "1 tbsp mirin",
+      "1 tbsp soy sauce",
+      "1 tbsp honey",
+      "1 tsp grated ginger",
+      "Sliced scallions and sesame seeds, to finish",
+    ],
+    steps: [
+      "Stir the miso, mirin, soy sauce, honey, and ginger into a smooth glaze.",
+      "Brush the glaze over the salmon and let it sit for 15 minutes.",
+      "Broil on a lined tray for 7 to 9 minutes, until the top caramelizes and the fish flakes easily.",
+      "Finish with scallions and sesame seeds, and serve with rice.",
+    ],
+    tags: ["japanese", "seafood", "weeknight"],
+    cookedCount: 3,
+    lastCookedDaysAgo: 30,
+  },
+  {
+    title: "Shakshuka",
+    ingredients: [
+      "2 tbsp olive oil",
+      "1 onion, diced",
+      "1 red bell pepper, diced",
+      "3 garlic cloves, minced",
+      "1 tsp cumin",
+      "1 tsp paprika",
+      "1 can (28 oz) crushed tomatoes",
+      "6 eggs",
+      "Feta and parsley, to finish",
+    ],
+    steps: [
+      "Cook the onion and pepper in the olive oil until soft, about 8 minutes.",
+      "Add the garlic and spices and cook for 1 minute.",
+      "Pour in the tomatoes, season, and simmer for 10 minutes until slightly thickened.",
+      "Make six wells and crack an egg into each. Cover and cook until the whites set.",
+      "Top with feta and parsley, and serve with crusty bread.",
+    ],
+    tags: ["breakfast", "vegetarian", "middle-eastern"],
+    cookedCount: 5,
+    lastCookedDaysAgo: 15,
+  },
+  {
+    title: "Chana Masala",
+    ingredients: [
+      "2 cans chickpeas, drained",
+      "2 tbsp oil",
+      "1 onion, finely chopped",
+      "1 tbsp ginger-garlic paste",
+      "2 tomatoes, pureed",
+      "1 tsp coriander powder",
+      "1 tsp cumin powder",
+      "1/2 tsp turmeric",
+      "1 tsp chana masala spice blend",
+      "Cilantro, to finish",
+    ],
+    steps: [
+      "Fry the onion in oil until deep golden, then add the ginger-garlic paste.",
+      "Add the tomato puree and cook until the oil separates, about 8 minutes.",
+      "Stir in the spices and cook for 1 minute.",
+      "Add the chickpeas and 1 cup water and simmer for 15 minutes, mashing a few chickpeas to thicken.",
+      "Season, finish with cilantro, and serve with rice or bhature.",
+    ],
+    tags: ["indian", "vegan"],
+    cookedCount: 8,
+    lastCookedDaysAgo: 2,
+  },
+  {
+    title: "Thai Green Curry with Vegetables",
+    ingredients: [
+      "2 tbsp green curry paste",
+      "1 can coconut milk",
+      "1 cup vegetable stock",
+      "1 small eggplant, cubed",
+      "1 red bell pepper, sliced",
+      "1 cup green beans, trimmed",
+      "1 block firm tofu, cubed",
+      "1 tbsp soy sauce",
+      "1 tsp brown sugar",
+      "Handful of Thai basil",
+    ],
+    steps: [
+      "Fry the curry paste in a few spoonfuls of the thick coconut cream until fragrant.",
+      "Add the rest of the coconut milk and the stock and bring to a simmer.",
+      "Add the eggplant and cook for 5 minutes, then the pepper, beans, and tofu.",
+      "Season with soy sauce and sugar and simmer until the vegetables are tender.",
+      "Stir in the basil and serve over jasmine rice.",
+    ],
+    tags: ["thai", "vegan"],
+    cookedCount: 3,
+    lastCookedDaysAgo: 25,
+  },
+  {
+    title: "Beef and Broccoli Stir-Fry",
+    ingredients: [
+      "1 lb flank steak, thinly sliced against the grain",
+      "1 tbsp cornstarch",
+      "4 cups broccoli florets",
+      "3 tbsp soy sauce",
+      "1 tbsp oyster sauce",
+      "1 tbsp brown sugar",
+      "2 garlic cloves, minced",
+      "1 tsp grated ginger",
+      "2 tbsp neutral oil",
+    ],
+    steps: [
+      "Toss the beef with cornstarch and 1 tbsp soy sauce.",
+      "Mix the remaining soy sauce, oyster sauce, sugar, and 1/4 cup water for the sauce.",
+      "Sear the beef in batches in a very hot wok and set aside.",
+      "Stir-fry the broccoli with a splash of water until bright green, then add the garlic and ginger.",
+      "Return the beef, pour in the sauce, and toss until glossy.",
+    ],
+    tags: ["chinese", "weeknight"],
+    cookedCount: 6,
+    lastCookedDaysAgo: 11,
+  },
+  {
+    title: "Mushroom Risotto",
+    ingredients: [
+      "1.5 cups arborio rice",
+      "1 lb mixed mushrooms, sliced",
+      "1 shallot, minced",
+      "1/2 cup dry white wine",
+      "6 cups warm vegetable stock",
+      "3 tbsp butter",
+      "3/4 cup grated parmesan",
+      "Fresh thyme",
+    ],
+    steps: [
+      "Brown the mushrooms in 1 tbsp butter with thyme, season, and set aside.",
+      "Soften the shallot in another tbsp butter, add the rice, and toast for 2 minutes.",
+      "Add the wine and stir until absorbed.",
+      "Add stock a ladle at a time, stirring often, for about 18 minutes until creamy and just tender.",
+      "Off the heat, stir in the mushrooms, remaining butter, and parmesan. Rest for 2 minutes.",
+    ],
+    tags: ["italian", "vegetarian"],
+    cookedCount: 2,
+    lastCookedDaysAgo: 45,
+  },
+  {
+    title: "Greek Salad with Oregano Dressing",
+    ingredients: [
+      "3 tomatoes, cut into wedges",
+      "1 cucumber, sliced",
+      "1/2 red onion, thinly sliced",
+      "1 green bell pepper, sliced",
+      "1/2 cup kalamata olives",
+      "6 oz block of feta",
+      "1/4 cup olive oil",
+      "1 tbsp red wine vinegar",
+      "1 tsp dried oregano",
+    ],
+    steps: [
+      "Arrange the tomatoes, cucumber, onion, pepper, and olives in a wide bowl.",
+      "Whisk the olive oil, vinegar, oregano, and a pinch of salt.",
+      "Lay the feta on top as a whole slab, pour over the dressing, and sprinkle with more oregano.",
+    ],
+    tags: ["salad", "vegetarian", "greek"],
+    cookedCount: 10,
+    lastCookedDaysAgo: 3,
+  },
+  {
+    title: "Brown Butter Banana Bread",
+    ingredients: [
+      "1/2 cup butter",
+      "3 very ripe bananas, mashed",
+      "3/4 cup brown sugar",
+      "2 eggs",
+      "1 tsp vanilla",
+      "1.75 cups all-purpose flour",
+      "1 tsp baking soda",
+      "1/2 tsp cinnamon",
+      "1/2 tsp salt",
+      "1/2 cup chopped walnuts",
+    ],
+    steps: [
+      "Heat the oven to 350°F and grease a loaf pan.",
+      "Brown the butter in a pan until nutty and amber, then let it cool slightly.",
+      "Whisk the butter with the bananas, sugar, eggs, and vanilla.",
+      "Fold in the flour, baking soda, cinnamon, salt, and walnuts.",
+      "Bake for 55 to 60 minutes, until a skewer comes out clean. Cool before slicing.",
+    ],
+    tags: ["baking", "dessert"],
+    cookedCount: 4,
+    lastCookedDaysAgo: 18,
+  },
+  {
+    title: "Dal Tadka",
+    ingredients: [
+      "1 cup toor dal, rinsed",
+      "1/2 tsp turmeric",
+      "1 tomato, chopped",
+      "2 tbsp ghee or oil",
+      "1 tsp cumin seeds",
+      "2 dried red chilies",
+      "4 garlic cloves, sliced",
+      "Pinch of asafoetida",
+      "1/2 tsp Kashmiri chili powder",
+      "Cilantro and lemon",
+    ],
+    steps: [
+      "Pressure cook the dal with turmeric, tomato, salt, and 3 cups water until completely soft.",
+      "Whisk the dal smooth and thin it with water to the consistency you like.",
+      "For the tadka, heat the ghee and add the cumin, red chilies, garlic, and asafoetida.",
+      "When the garlic turns golden, take it off the heat, add the chili powder, and pour over the dal.",
+      "Finish with cilantro and a squeeze of lemon.",
+    ],
+    tags: ["indian", "vegan", "soup"],
+    cookedCount: 12,
+    lastCookedDaysAgo: 1,
+  },
+  {
+    title: "Shortcut Chicken Pho",
+    ingredients: [
+      "8 cups chicken stock",
+      "1 onion, halved",
+      "3-inch piece of ginger, halved",
+      "2 star anise",
+      "1 cinnamon stick",
+      "4 cloves",
+      "2 tbsp fish sauce",
+      "2 chicken breasts",
+      "8 oz rice noodles",
+      "Bean sprouts, basil, lime, and sliced chili",
+    ],
+    steps: [
+      "Char the onion and ginger in a dry pan until blackened in spots.",
+      "Toast the spices, then add the stock, onion, and ginger and simmer for 30 minutes.",
+      "Poach the chicken in the broth for 15 minutes, then shred it.",
+      "Strain the broth and season with fish sauce.",
+      "Pour the hot broth over cooked noodles and chicken, and serve with the herbs and lime.",
+    ],
+    tags: ["vietnamese", "soup"],
+    cookedCount: 3,
+    lastCookedDaysAgo: 40,
+  },
+  {
+    title: "Roasted Tomato Soup",
+    ingredients: [
+      "2 lb ripe tomatoes, halved",
+      "1 onion, quartered",
+      "6 garlic cloves",
+      "3 tbsp olive oil",
+      "2 cups vegetable stock",
+      "1/4 cup cream (optional)",
+      "Fresh basil",
+    ],
+    steps: [
+      "Roast the tomatoes, onion, and garlic with olive oil and salt at 425°F for 35 minutes.",
+      "Transfer to a pot with the stock and simmer for 10 minutes.",
+      "Blend until smooth, then stir in the cream if using.",
+      "Serve with torn basil and a grilled cheese sandwich.",
+    ],
+    tags: ["soup", "vegetarian"],
+    cookedCount: 4,
+    lastCookedDaysAgo: 22,
+  },
+  {
+    title: "Margherita Flatbread",
+    ingredients: [
+      "1 lb pizza dough",
+      "1/2 cup crushed tomatoes",
+      "1 garlic clove, grated",
+      "8 oz fresh mozzarella, torn",
+      "Fresh basil",
+      "Olive oil",
+      "Flaky salt",
+    ],
+    steps: [
+      "Heat the oven as hot as it goes with a tray or stone inside.",
+      "Stretch the dough into a long oval and place it on parchment.",
+      "Season the tomatoes with garlic and salt and spread thinly over the dough.",
+      "Add the mozzarella and bake for 8 to 10 minutes until blistered.",
+      "Finish with basil, olive oil, and flaky salt.",
+    ],
+    tags: ["italian", "vegetarian"],
+    cookedCount: 5,
+    lastCookedDaysAgo: 8,
+  },
+  {
+    title: "Bibimbap Bowl",
+    ingredients: [
+      "4 cups cooked short-grain rice",
+      "8 oz ground beef or tofu",
+      "2 tbsp soy sauce",
+      "1 tbsp sesame oil",
+      "2 cups spinach",
+      "1 carrot, julienned",
+      "1 zucchini, julienned",
+      "1 cup bean sprouts",
+      "4 eggs",
+      "Gochujang, to serve",
+    ],
+    steps: [
+      "Brown the beef or tofu with soy sauce and half the sesame oil.",
+      "Quickly cook each vegetable separately with a pinch of salt and a drop of sesame oil.",
+      "Fry the eggs sunny side up.",
+      "Divide the rice into bowls, arrange the vegetables and protein on top, and add an egg.",
+      "Serve with gochujang and mix everything together at the table.",
+    ],
+    tags: ["korean"],
+    cookedCount: 2,
+    lastCookedDaysAgo: 35,
+  },
+  {
+    title: "Chewy Chocolate Chip Cookies",
+    ingredients: [
+      "1 cup butter, softened",
+      "3/4 cup brown sugar",
+      "1/2 cup white sugar",
+      "2 eggs",
+      "2 tsp vanilla",
+      "2.25 cups all-purpose flour",
+      "1 tsp baking soda",
+      "1 tsp salt",
+      "2 cups chocolate chips",
+    ],
+    steps: [
+      "Cream the butter and both sugars until fluffy, then beat in the eggs and vanilla.",
+      "Mix in the flour, baking soda, and salt, then fold in the chocolate chips.",
+      "Chill the dough for at least 1 hour.",
+      "Scoop onto lined trays and bake at 350°F for 10 to 11 minutes, until the edges are golden.",
+      "Cool on the tray for 5 minutes before moving.",
+    ],
+    tags: ["baking", "dessert"],
+    cookedCount: 7,
+    lastCookedDaysAgo: 14,
+  },
+  {
+    title: "Spiced Red Lentil Soup",
+    ingredients: [
+      "1 cup red lentils, rinsed",
+      "1 onion, chopped",
+      "2 carrots, chopped",
+      "2 garlic cloves",
+      "1 tsp cumin",
+      "1 tsp smoked paprika",
+      "1 tbsp tomato paste",
+      "5 cups vegetable stock",
+      "1 lemon",
+    ],
+    steps: [
+      "Soften the onion and carrots in olive oil for 8 minutes.",
+      "Add the garlic, spices, and tomato paste and cook for 1 minute.",
+      "Add the lentils and stock and simmer for 20 minutes until the lentils fall apart.",
+      "Blend partially, leaving some texture, and finish with lemon juice.",
+    ],
+    tags: ["soup", "vegan"],
+    cookedCount: 6,
+    lastCookedDaysAgo: 10,
+  },
+  {
+    title: "Fish Tacos with Chipotle Crema",
+    ingredients: [
+      "1 lb white fish fillets",
+      "1 tsp chili powder",
+      "1 tsp cumin",
+      "1/2 cup sour cream",
+      "1 chipotle in adobo, minced",
+      "1 lime",
+      "2 cups shredded red cabbage",
+      "8 small flour or corn tortillas",
+      "Pickled red onion",
+    ],
+    steps: [
+      "Season the fish with chili powder, cumin, and salt.",
+      "Stir the sour cream, chipotle, and lime juice into a crema.",
+      "Sear the fish in a hot pan for 3 minutes per side, then flake it into pieces.",
+      "Fill warm tortillas with cabbage, fish, crema, and pickled onion.",
+    ],
+    tags: ["mexican", "seafood"],
+    cookedCount: 3,
+    lastCookedDaysAgo: 28,
+  },
+  {
+    title: "Egg Fried Rice",
+    ingredients: [
+      "3 cups cooked rice, chilled overnight",
+      "3 eggs, beaten",
+      "1 cup frozen peas and carrots",
+      "3 scallions, sliced",
+      "2 tbsp soy sauce",
+      "1 tsp sesame oil",
+      "2 tbsp neutral oil",
+      "White pepper",
+    ],
+    steps: [
+      "Scramble the eggs in a hot wok until just set, then remove.",
+      "Stir-fry the peas, carrots, and the white parts of the scallions for 2 minutes.",
+      "Add the rice, breaking up clumps, and fry until it starts to crisp.",
+      "Add the soy sauce, sesame oil, white pepper, and eggs, and toss.",
+      "Finish with the scallion greens.",
+    ],
+    tags: ["chinese", "weeknight"],
+    cookedCount: 11,
+    lastCookedDaysAgo: 5,
+  },
+  {
+    title: "Mango Lassi",
+    ingredients: [
+      "1.5 cups ripe mango pulp",
+      "1 cup plain yogurt",
+      "1/2 cup cold milk",
+      "1 to 2 tbsp sugar",
+      "Pinch of ground cardamom",
+      "Handful of ice",
+    ],
+    steps: [
+      "Blend everything until smooth and frothy.",
+      "Taste and adjust the sweetness.",
+      "Pour into glasses and dust with a little more cardamom.",
+    ],
+    tags: ["indian", "drinks"],
+    cookedCount: 8,
+    lastCookedDaysAgo: 7,
+  },
+  {
+    title: "Sheet Pan Gnocchi with Sausage and Peppers",
+    ingredients: [
+      "1 lb shelf-stable gnocchi",
+      "4 Italian sausages, sliced",
+      "2 bell peppers, sliced",
+      "1 red onion, cut into wedges",
+      "2 tbsp olive oil",
+      "1 tsp dried oregano",
+      "Grated parmesan",
+    ],
+    steps: [
+      "Heat the oven to 425°F.",
+      "Toss the gnocchi, sausage, peppers, and onion with the oil, oregano, and salt on a sheet pan.",
+      "Roast for 25 minutes, tossing halfway, until the gnocchi are crisp.",
+      "Finish with parmesan.",
+    ],
+    tags: ["italian", "weeknight"],
+    cookedCount: 4,
+    lastCookedDaysAgo: 16,
+  },
+  {
+    title: "Overnight Oats",
+    ingredients: [
+      "1/2 cup rolled oats",
+      "1/2 cup milk",
+      "1/4 cup yogurt",
+      "1 tbsp chia seeds",
+      "1 tsp maple syrup",
+      "Berries and nuts, to top",
+    ],
+    steps: [
+      "Stir the oats, milk, yogurt, chia, and maple syrup together in a jar.",
+      "Cover and refrigerate overnight.",
+      "In the morning, loosen with a splash of milk and top with berries and nuts.",
+    ],
+    tags: ["breakfast", "vegetarian"],
+    cookedCount: 15,
+    lastCookedDaysAgo: 1,
+  },
+  {
+    title: "Aloo Gobi",
+    ingredients: [
+      "1 head cauliflower, cut into florets",
+      "2 potatoes, cubed",
+      "1 onion, sliced",
+      "1 tsp cumin seeds",
+      "1 tbsp grated ginger",
+      "1/2 tsp turmeric",
+      "1 tsp coriander powder",
+      "1/2 tsp garam masala",
+      "3 tbsp oil",
+      "Cilantro",
+    ],
+    steps: [
+      "Heat the oil, add the cumin seeds, then the onion, and cook until soft.",
+      "Add the ginger, turmeric, and coriander and stir for 30 seconds.",
+      "Add the potatoes and cauliflower, season, and toss to coat.",
+      "Cover and cook on low for 15 to 20 minutes, stirring occasionally, until tender.",
+      "Uncover, sprinkle with garam masala, and cook a few more minutes to crisp the edges.",
+    ],
+    tags: ["indian", "vegan"],
+    cookedCount: 5,
+    lastCookedDaysAgo: 13,
+  },
+  {
+    title: "Thai Basil Chicken",
+    ingredients: [
+      "1 lb ground chicken",
+      "4 garlic cloves",
+      "3 Thai chilies",
+      "1 tbsp oyster sauce",
+      "1 tbsp soy sauce",
+      "1 tsp fish sauce",
+      "1 tsp sugar",
+      "2 cups holy basil or Thai basil leaves",
+      "4 fried eggs, to serve",
+    ],
+    steps: [
+      "Pound the garlic and chilies into a rough paste.",
+      "Fry the paste in a hot wok for a few seconds, then add the chicken and break it up.",
+      "Add the sauces and sugar and cook until the chicken is done and slightly caramelized.",
+      "Toss in the basil until just wilted.",
+      "Serve over rice with a crispy fried egg.",
+    ],
+    tags: ["thai", "weeknight"],
+    cookedCount: 6,
+    lastCookedDaysAgo: 19,
+  },
+  {
+    title: "Caprese Pasta Salad",
+    ingredients: [
+      "12 oz short pasta",
+      "2 cups cherry tomatoes, halved",
+      "8 oz mozzarella pearls",
+      "1/4 cup olive oil",
+      "2 tbsp balsamic vinegar",
+      "1 garlic clove, grated",
+      "Fresh basil",
+    ],
+    steps: [
+      "Cook the pasta, rinse it under cold water, and drain well.",
+      "Whisk the olive oil, balsamic, garlic, and salt.",
+      "Toss the pasta with the tomatoes, mozzarella, dressing, and torn basil.",
+      "Chill for 20 minutes before serving.",
+    ],
+    tags: ["salad", "vegetarian", "italian"],
+    cookedCount: 3,
+    lastCookedDaysAgo: 50,
+  },
+  {
+    title: "Apple Crumble",
+    ingredients: [
+      "5 apples, peeled and sliced",
+      "2 tbsp sugar",
+      "1 tsp cinnamon",
+      "1 tbsp lemon juice",
+      "3/4 cup flour",
+      "1/2 cup rolled oats",
+      "1/2 cup brown sugar",
+      "1/2 cup cold butter, cubed",
+    ],
+    steps: [
+      "Heat the oven to 375°F.",
+      "Toss the apples with the sugar, cinnamon, and lemon juice and spread them in a baking dish.",
+      "Rub the flour, oats, brown sugar, and butter together into a coarse crumble.",
+      "Scatter it over the apples and bake for 40 minutes until golden and bubbling.",
+      "Serve warm with vanilla ice cream.",
+    ],
+    tags: ["dessert", "baking"],
+    cookedCount: 2,
+    lastCookedDaysAgo: 60,
+  },
+  {
+    title: "Masala Chai",
+    ingredients: [
+      "1.5 cups water",
+      "1 cup milk",
+      "2 tsp loose black tea",
+      "4 green cardamom pods, crushed",
+      "1 small piece of cinnamon",
+      "3 slices ginger",
+      "2 cloves",
+      "Sugar to taste",
+    ],
+    steps: [
+      "Simmer the water with the spices and ginger for 5 minutes.",
+      "Add the tea and simmer for 2 minutes.",
+      "Pour in the milk and sugar and bring it up to a rolling boil twice.",
+      "Strain into cups and serve hot.",
+    ],
+    tags: ["indian", "drinks"],
+    cookedCount: 20,
+    lastCookedDaysAgo: 0,
+  },
+];
+===== prisma/seed-data/restaurants.ts
+// Demo restaurants for the showcase site. Every restaurant here is
+// fictional, so no real business gets a made-up review. Addresses are
+// left empty for the same reason.
+
+export type SeedVisit = {
+  date: string; // YYYY-MM-DD
+  rating: number; // 1 to 5
+  notes: string;
+  dishesTried: string[];
+};
+
+export type SeedRestaurant = {
+  name: string;
+  cuisine: string;
+  city: string;
+  visits: SeedVisit[];
+};
+
+export const restaurants: SeedRestaurant[] = [
+  {
+    name: "Saffron Lane",
+    cuisine: "Indian",
+    city: "Washington, DC",
+    visits: [
+      {
+        date: "2026-09-12",
+        rating: 5,
+        notes: "Best butter chicken I've had in years. The naan comes out puffed and blistered straight from the tandoor.",
+        dishesTried: ["Butter chicken", "Garlic naan", "Mango lassi"],
+      },
+      {
+        date: "2026-06-03",
+        rating: 4,
+        notes: "Busy Friday, so service was slow, but the lamb rogan josh was worth the wait.",
+        dishesTried: ["Lamb rogan josh", "Jeera rice", "Gulab jamun"],
+      },
+    ],
+  },
+  {
+    name: "Little Ember Noodle Bar",
+    cuisine: "Japanese",
+    city: "New York, NY",
+    visits: [
+      {
+        date: "2026-08-21",
+        rating: 5,
+        notes: "Rich, porky tonkotsu broth with perfectly jammy eggs. There's a line, but it moves fast.",
+        dishesTried: ["Tonkotsu ramen", "Pork gyoza"],
+      },
+    ],
+  },
+  {
+    name: "The Copper Pot",
+    cuisine: "American",
+    city: "Chicago, IL",
+    visits: [
+      {
+        date: "2026-07-14",
+        rating: 3,
+        notes: "Solid burger, forgettable fries. Fine for a quick lunch but not worth a special trip.",
+        dishesTried: ["Smash burger", "Fries", "Chocolate shake"],
+      },
+    ],
+  },
+  {
+    name: "Casa Marigold",
+    cuisine: "Mexican",
+    city: "Austin, TX",
+    visits: [
+      {
+        date: "2026-05-30",
+        rating: 5,
+        notes: "Handmade tortillas and a smoky salsa macha I'd buy by the jar. The patio is lovely at sunset.",
+        dishesTried: ["Al pastor tacos", "Elote", "Horchata"],
+      },
+      {
+        date: "2026-09-02",
+        rating: 4,
+        notes: "Came back for brunch. The chilaquiles were great, but the coffee was weak.",
+        dishesTried: ["Chilaquiles verdes", "Café de olla"],
+      },
+    ],
+  },
+  {
+    name: "Olive & Thyme",
+    cuisine: "Mediterranean",
+    city: "Boston, MA",
+    visits: [
+      {
+        date: "2026-04-18",
+        rating: 4,
+        notes: "Generous mezze platter and very good hummus. The lamb kofta was a touch dry.",
+        dishesTried: ["Mezze platter", "Lamb kofta", "Baklava"],
+      },
+    ],
+  },
+  {
+    name: "Pho Sunrise",
+    cuisine: "Vietnamese",
+    city: "Seattle, WA",
+    visits: [
+      {
+        date: "2026-02-09",
+        rating: 5,
+        notes: "Exactly what a rainy day needs. The broth is clear and deeply spiced.",
+        dishesTried: ["Pho tai", "Fresh spring rolls", "Vietnamese iced coffee"],
+      },
+      {
+        date: "2026-08-30",
+        rating: 5,
+        notes: "Tried the bun bo Hue this time, and it was just as good as the pho.",
+        dishesTried: ["Bun bo Hue", "Banh mi"],
+      },
+    ],
+  },
+  {
+    name: "Bramble Bakehouse",
+    cuisine: "Bakery",
+    city: "Philadelphia, PA",
+    visits: [
+      {
+        date: "2026-03-22",
+        rating: 4,
+        notes: "Flaky croissants and a great cardamom bun. They sell out by 11, so go early.",
+        dishesTried: ["Almond croissant", "Cardamom bun", "Cortado"],
+      },
+    ],
+  },
+  {
+    name: "Golden Wok Kitchen",
+    cuisine: "Chinese",
+    city: "San Francisco, CA",
+    visits: [
+      {
+        date: "2026-01-11",
+        rating: 4,
+        notes: "Excellent dumplings and properly numbing mapo tofu. The dining room is tight.",
+        dishesTried: ["Xiao long bao", "Mapo tofu", "Dry-fried green beans"],
+      },
+    ],
+  },
+  {
+    name: "Basil & Brick",
+    cuisine: "Italian",
+    city: "Brooklyn, NY",
+    visits: [
+      {
+        date: "2026-06-27",
+        rating: 5,
+        notes: "Wood-fired pizza with a puffy, leopard-spotted crust. The burrata starter is a must.",
+        dishesTried: ["Margherita pizza", "Burrata", "Tiramisu"],
+      },
+    ],
+  },
+  {
+    name: "Seoul Garden Grill",
+    cuisine: "Korean",
+    city: "Los Angeles, CA",
+    visits: [
+      {
+        date: "2026-07-05",
+        rating: 4,
+        notes: "Fun tabletop barbecue with a huge banchan spread. Leave smelling like grill smoke.",
+        dishesTried: ["Galbi", "Pork belly", "Kimchi pancake"],
+      },
+    ],
+  },
+  {
+    name: "The Spice Route",
+    cuisine: "Indian",
+    city: "Baltimore, MD",
+    visits: [
+      {
+        date: "2025-12-14",
+        rating: 3,
+        notes: "Good dosa, but the curries tasted like they shared one base sauce.",
+        dishesTried: ["Masala dosa", "Chicken korma", "Sambar"],
+      },
+    ],
+  },
+  {
+    name: "Harbor Light Oyster House",
+    cuisine: "Seafood",
+    city: "Boston, MA",
+    visits: [
+      {
+        date: "2026-08-09",
+        rating: 5,
+        notes: "Very fresh oysters and a buttery lobster roll. Pricey, but it feels like a treat.",
+        dishesTried: ["Half dozen oysters", "Lobster roll", "Clam chowder"],
+      },
+    ],
+  },
+  {
+    name: "Taqueria El Faro",
+    cuisine: "Mexican",
+    city: "Chicago, IL",
+    visits: [
+      {
+        date: "2026-03-08",
+        rating: 4,
+        notes: "Cheap, fast, and very good carnitas. Cash only.",
+        dishesTried: ["Carnitas tacos", "Quesadilla", "Agua fresca"],
+      },
+    ],
+  },
+  {
+    name: "Kin Thai Street Kitchen",
+    cuisine: "Thai",
+    city: "Portland, OR",
+    visits: [
+      {
+        date: "2026-05-16",
+        rating: 5,
+        notes: "Proper Thai spice levels if you ask. The khao soi is outstanding.",
+        dishesTried: ["Khao soi", "Papaya salad", "Thai iced tea"],
+      },
+      {
+        date: "2026-09-19",
+        rating: 4,
+        notes: "Pad see ew was a bit greasy this time, but the larb was great.",
+        dishesTried: ["Pad see ew", "Larb gai"],
+      },
+    ],
+  },
+  {
+    name: "Fern & Fig",
+    cuisine: "Vegetarian",
+    city: "Washington, DC",
+    visits: [
+      {
+        date: "2026-04-04",
+        rating: 4,
+        notes: "Creative vegetable plates that don't feel like a compromise. The roasted carrot dish stood out.",
+        dishesTried: ["Roasted carrots with dukkah", "Mushroom toast", "Beet salad"],
+      },
+    ],
+  },
+  {
+    name: "Smokestack BBQ Co.",
+    cuisine: "Barbecue",
+    city: "Austin, TX",
+    visits: [
+      {
+        date: "2026-05-31",
+        rating: 5,
+        notes: "Brisket with a great bark that falls apart under a fork. Worth the hour-long line.",
+        dishesTried: ["Brisket", "Pork ribs", "Mac and cheese"],
+      },
+    ],
+  },
+  {
+    name: "Café Lumière",
+    cuisine: "French",
+    city: "New York, NY",
+    visits: [
+      {
+        date: "2026-02-14",
+        rating: 4,
+        notes: "Classic bistro food done well. The steak frites and crème brûlée were spot on.",
+        dishesTried: ["Steak frites", "French onion soup", "Crème brûlée"],
+      },
+    ],
+  },
+  {
+    name: "Mezze Moon",
+    cuisine: "Lebanese",
+    city: "Detroit, MI",
+    visits: [
+      {
+        date: "2026-06-12",
+        rating: 5,
+        notes: "Silky hummus, crisp falafel, and garlic sauce strong enough to scare vampires.",
+        dishesTried: ["Shawarma plate", "Falafel", "Fattoush"],
+      },
+    ],
+  },
+  {
+    name: "Rustic Table Diner",
+    cuisine: "American",
+    city: "Gettysburg, PA",
+    visits: [
+      {
+        date: "2025-11-29",
+        rating: 3,
+        notes: "Friendly roadside diner. Average pancakes but bottomless coffee and good hash browns.",
+        dishesTried: ["Pancake stack", "Hash browns", "Coffee"],
+      },
+    ],
+  },
+  {
+    name: "Ginger Lotus",
+    cuisine: "Vietnamese",
+    city: "Houston, TX",
+    visits: [
+      {
+        date: "2026-01-25",
+        rating: 4,
+        notes: "Excellent banh mi on crackly bread. The grilled pork vermicelli bowl is huge.",
+        dishesTried: ["Grilled pork banh mi", "Bun thit nuong"],
+      },
+    ],
+  },
+  {
+    name: "Nonna Rosa's Trattoria",
+    cuisine: "Italian",
+    city: "Philadelphia, PA",
+    visits: [
+      {
+        date: "2026-03-21",
+        rating: 4,
+        notes: "Homemade pasta and a warm, family-run feel. The cacio e pepe was very peppery in a good way.",
+        dishesTried: ["Cacio e pepe", "Meatballs", "Cannoli"],
+      },
+    ],
+  },
+  {
+    name: "Bombay Chaat House",
+    cuisine: "Indian Street Food",
+    city: "Edison, NJ",
+    visits: [
+      {
+        date: "2026-07-26",
+        rating: 5,
+        notes: "Crunchy, tangy, sweet, and spicy in every bite. The pani puri is the real deal.",
+        dishesTried: ["Pani puri", "Pav bhaji", "Masala chai"],
+      },
+      {
+        date: "2026-09-20",
+        rating: 5,
+        notes: "Brought friends this time and ordered half the menu. The vada pav was a new favorite.",
+        dishesTried: ["Vada pav", "Bhel puri", "Kulfi"],
+      },
+    ],
+  },
+  {
+    name: "Sakura Sushi Counter",
+    cuisine: "Japanese",
+    city: "Seattle, WA",
+    visits: [
+      {
+        date: "2026-02-08",
+        rating: 4,
+        notes: "Fresh fish and well-seasoned rice. The omakase is good value for the quality.",
+        dishesTried: ["Omakase (12 pieces)", "Miso soup"],
+      },
+    ],
+  },
+  {
+    name: "Blue Agave Cantina",
+    cuisine: "Tex-Mex",
+    city: "San Antonio, TX",
+    visits: [
+      {
+        date: "2026-06-01",
+        rating: 2,
+        notes: "The queso was good, but everything else was bland and the fajitas came out lukewarm.",
+        dishesTried: ["Queso", "Chicken fajitas"],
+      },
+    ],
+  },
+  {
+    name: "Dragon Pearl Dim Sum",
+    cuisine: "Chinese",
+    city: "New York, NY",
+    visits: [
+      {
+        date: "2026-08-23",
+        rating: 4,
+        notes: "Weekend carts, organized chaos, and very good shrimp dumplings. Arrive before 10.",
+        dishesTried: ["Har gow", "Siu mai", "Egg tarts"],
+      },
+    ],
+  },
+  {
+    name: "Wildflower Brunch Co.",
+    cuisine: "Brunch",
+    city: "Denver, CO",
+    visits: [
+      {
+        date: "2026-04-26",
+        rating: 3,
+        notes: "Very pretty plates, average flavor. The lemon ricotta pancakes were the highlight.",
+        dishesTried: ["Lemon ricotta pancakes", "Avocado toast"],
+      },
+    ],
+  },
+  {
+    name: "Addis Table",
+    cuisine: "Ethiopian",
+    city: "Washington, DC",
+    visits: [
+      {
+        date: "2026-05-09",
+        rating: 5,
+        notes: "The veggie combo on spongy injera is fantastic for sharing. The misir wot is the standout.",
+        dishesTried: ["Veggie combo", "Doro wot", "Ethiopian coffee"],
+      },
+    ],
+  },
+  {
+    name: "Northside Pizza Joint",
+    cuisine: "Pizza",
+    city: "Chicago, IL",
+    visits: [
+      {
+        date: "2026-07-13",
+        rating: 4,
+        notes: "Deep dish that's more sauce than crust, in the best way. One slice is a whole meal.",
+        dishesTried: ["Deep dish sausage pizza", "Garlic bread"],
+      },
+    ],
+  },
+  {
+    name: "Tandoor Nights",
+    cuisine: "Pakistani",
+    city: "Houston, TX",
+    visits: [
+      {
+        date: "2026-01-24",
+        rating: 4,
+        notes: "Smoky seekh kebabs and a fragrant biryani. Portions are huge.",
+        dishesTried: ["Chicken biryani", "Seekh kebab", "Kheer"],
+      },
+    ],
+  },
+  {
+    name: "Lemongrass & Lime",
+    cuisine: "Thai",
+    city: "Minneapolis, MN",
+    visits: [
+      {
+        date: "2026-09-26",
+        rating: 4,
+        notes: "Reliable neighborhood Thai. The drunken noodles have real wok smokiness.",
+        dishesTried: ["Drunken noodles", "Tom kha soup", "Mango sticky rice"],
+      },
+    ],
+  },
+];
