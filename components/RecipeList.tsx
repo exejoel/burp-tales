@@ -2,14 +2,16 @@
 
 import { useState } from "react";
 import { useSearchParams } from "next/navigation";
+import Image from "next/image";
 import Link from "next/link";
 
 // Only the fields the list needs. The server page selects exactly these,
-// so the client never receives the full recipe (steps, image, etc.).
+// so the client never receives the full recipe (steps, notes, etc.).
 export type RecipeSummary = {
   id: string;
   title: string;
   ingredients: string;
+  image: string | null;
 };
 
 type RecipeListProps = {
@@ -52,6 +54,76 @@ function ingredientPreview(text: string, max = 5): string {
   const shown = items.slice(0, max).join(", ");
   const extra = items.length - max;
   return extra > 0 ? `${shown}, and ${extra} more` : shown;
+}
+
+// Full class strings, not built from pieces, so Tailwind can find them
+// when it scans the source.
+const PLACEHOLDER_TINTS = [
+  "bg-amber-100 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300",
+  "bg-rose-100 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300",
+  "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300",
+  "bg-orange-100 text-orange-700 dark:bg-orange-950/60 dark:text-orange-300",
+  "bg-sky-100 text-sky-700 dark:bg-sky-950/60 dark:text-sky-300",
+];
+
+// Same id, same tint, on every render and every visit. Based on the id,
+// not the title, so renaming a recipe doesn't change its color.
+function tintFor(id: string): string {
+  let hash = 0;
+  for (const char of id) hash = (hash + char.charCodeAt(0)) % 997;
+  return PLACEHOLDER_TINTS[hash % PLACEHOLDER_TINTS.length];
+}
+
+// A steaming bowl, drawn with strokes so it takes the tint's text color.
+function BowlIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.25}
+      strokeLinecap="round"
+      className="size-12 opacity-70"
+    >
+      <path d="M3 12h18a9 8 0 0 1-18 0Z" />
+      <path d="M8.5 8.5c0-1.5 1-1.75 1-3.25M12 8.5c0-1.5 1-1.75 1-3.25M15.5 8.5c0-1.5 1-1.75 1-3.25" />
+    </svg>
+  );
+}
+
+// The card's image area. Scraped images live on other people's sites and
+// can disappear later, so a failed load falls back to the same tile as a
+// recipe with no image. Each card has its own `failed` state because the
+// list is keyed by recipe id.
+function RecipeImage({ recipe }: { recipe: RecipeSummary }) {
+  const [failed, setFailed] = useState(false);
+  const showPhoto = recipe.image && !failed;
+
+  return (
+    <div className="relative aspect-[4/3] overflow-hidden rounded-2xl">
+      {showPhoto ? (
+        // alt="" because the title right under it already names the dish;
+        // a screen reader would otherwise read the name twice.
+        <Image
+          src={recipe.image!}
+          alt=""
+          fill
+          // Tells the browser how wide the card is at each breakpoint,
+          // so it downloads a small file on phones and a sharp one on desktop.
+          sizes="(min-width: 1024px) 320px, (min-width: 640px) 50vw, 100vw"
+          onError={() => setFailed(true)}
+          className="object-cover transition-transform duration-500 group-hover:scale-105"
+        />
+      ) : (
+        <div
+          aria-hidden="true"
+          className={`flex size-full items-center justify-center transition-transform duration-500 group-hover:scale-105 ${tintFor(recipe.id)}`}
+        >
+          <BowlIcon />
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function RecipeList({ recipes }: RecipeListProps) {
@@ -97,7 +169,7 @@ export default function RecipeList({ recipes }: RecipeListProps) {
       </div>
 
       {/* Always rendered, so screen readers are already watching it when
-          the count appears, and the list below doesn't jump. */}
+          the count appears, and the grid below doesn't jump. */}
       <p aria-live="polite" className="mt-3 mb-8 h-5 text-center text-sm text-muted">
         {isFiltering && `${filteredRecipes.length} of ${recipes.length} recipes`}
       </p>
@@ -110,20 +182,18 @@ export default function RecipeList({ recipes }: RecipeListProps) {
           </button>
         </div>
       ) : (
-        <ul className="menu">
+        <ul className="grid gap-x-6 gap-y-10 sm:grid-cols-2 lg:grid-cols-3">
           {filteredRecipes.map((recipe) => {
-            const preview = ingredientPreview(recipe.ingredients);
+            const preview = ingredientPreview(recipe.ingredients, 4);
             return (
               <li key={recipe.id}>
-                <Link
-                  href={`/recipes/${recipe.id}`}
-                  className="group block text-center"
-                >
-                  <h2 className="font-display text-3xl font-medium text-balance transition-colors group-hover:text-basil">
+                <Link href={`/recipes/${recipe.id}`} className="group block">
+                  <RecipeImage recipe={recipe} />
+                  <h2 className="mt-4 font-display text-xl font-medium text-balance transition-colors group-hover:text-basil">
                     {recipe.title}
                   </h2>
                   {preview && (
-                    <p className="mt-1.5 text-sm text-muted text-balance">
+                    <p className="mt-1 line-clamp-1 text-sm text-muted">
                       {preview}
                     </p>
                   )}

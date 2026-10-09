@@ -12,7 +12,7 @@ export default async function RecipesPage() {
   const canEdit = await isOwner();
 
   return (
-    <main className="mx-auto w-full max-w-xl px-6 py-14">
+    <main className="mx-auto w-full max-w-5xl px-6 py-14">
       <header className="mb-10 text-center">
         <h1 className="font-display text-5xl font-medium tracking-tight">
           Recipes
@@ -34,12 +34,20 @@ export default async function RecipesPage() {
 // An async Server Component: React shows the Suspense fallback while this
 // awaits, then streams the finished list into the same HTML response.
 async function RecipeListData() {
-  const recipes = await prisma.recipe.findMany({
+  const rows = await prisma.recipe.findMany({
     orderBy: { createdAt: "desc" },
     // Select only what the list needs. Everything passed to a client
     // component is serialized into the page, so smaller is better.
-    select: { id: true, title: true, ingredients: true },
+    select: { id: true, title: true, ingredients: true, imageUrl: true },
   });
+
+  // next/image only accepts hosts allowed in next.config.ts, and that allows
+  // https only. Anything else (http, relative paths) gets the placeholder
+  // tile instead of crashing the page.
+  const recipes = rows.map(({ imageUrl, ...recipe }) => ({
+    ...recipe,
+    image: imageUrl?.startsWith("https://") ? imageUrl : null,
+  }));
 
   if (recipes.length === 0) {
     return (
@@ -57,12 +65,13 @@ function RecipeListSkeleton() {
     <div role="status">
       <span className="sr-only">Loading recipes</span>
       <div className="skeleton mx-auto h-10 max-w-sm" />
-      <div className="h-5 mb-8" />
-      <ul className="menu">
-        {[0, 1, 2].map((i) => (
-          <li key={i} className="flex flex-col items-center gap-2">
-            <div className="skeleton h-8 w-48" />
-            <div className="skeleton h-4 w-64" />
+      <div className="mt-3 mb-8 h-5" />
+      <ul className="grid gap-x-6 gap-y-10 sm:grid-cols-2 lg:grid-cols-3">
+        {[0, 1, 2, 3, 4, 5].map((i) => (
+          <li key={i}>
+            <div className="skeleton aspect-[4/3] rounded-2xl" />
+            <div className="skeleton mt-4 h-6 w-3/4" />
+            <div className="skeleton mt-2 h-4 w-1/2" />
           </li>
         ))}
       </ul>

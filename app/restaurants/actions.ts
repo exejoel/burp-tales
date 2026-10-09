@@ -29,7 +29,7 @@ export async function createRestaurantVisit(formData: FormData) {
   if (!restaurant) {
     restaurant = await prisma.restaurant.create({
       data: { name: restaurantName, cuisine, city },
-    });
+  });
   }
 
   await prisma.visit.create({
