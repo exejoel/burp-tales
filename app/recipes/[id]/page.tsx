@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import DeleteRecipeButton from "@/components/DeleteRecipeButton";
 import { isOwner } from "@/lib/owner";
+import ScaleIngredients from "@/components/ScaleIngredients";
 
 export const dynamic = "force-dynamic";
 
@@ -67,20 +68,12 @@ export default async function RecipeDetailPage({
           )}
         </div>
       </header>
-
       <section aria-labelledby="ingredients-heading" className="mb-12">
         <h2 id="ingredients-heading" className="font-display text-2xl font-medium mb-3">
           Ingredients
         </h2>
-        <ul className="border-t border-rule">
-          {ingredients.map((item, i) => (
-            // Index keys are fine here: this list never reorders or
-            // changes while the page is open.
-            <li key={i} className="border-b border-rule py-2.5">
-              {item}
-            </li>
-          ))}
-        </ul>
+        <p>Multiple the recipe by a factor of:</p>
+        <ScaleIngredients ingredients={ingredients} />
       </section>
 
       <section aria-labelledby="steps-heading">

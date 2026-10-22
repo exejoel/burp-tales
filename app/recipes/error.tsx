@@ -5,12 +5,13 @@ import Link from "next/link";
 
 // Catches errors anywhere under /recipes: the list, a recipe, the new and
 // edit pages, and Server Actions like deleteRecipe that throw.
+// ✅ fix
 export default function RecipesError({
   error,
-  unstable_retry,
+  reset,
 }: {
   error: Error & { digest?: string };
-  unstable_retry: () => void;
+  reset: () => void;
 }) {
   useEffect(() => {
     // Swap this for an error reporting service later.
@@ -29,7 +30,7 @@ export default function RecipesError({
         {/* unstable_retry re-fetches the server data and re-renders.
             The older reset() only re-renders, so a failed database
             query would just fail again. */}
-        <button type="button" onClick={() => unstable_retry()} className="btn-primary">
+        <button type="button" onClick={() => reset()} className="btn-primary">
           Try again
         </button>
         <Link href="/" className="btn-quiet">
