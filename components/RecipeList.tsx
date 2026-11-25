@@ -1,9 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { useSearchParams } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
+import SearchInput, { useSearch } from "@/components/SearchInput";
 
 // Only the fields the list needs. The server page selects exactly these,
 // so the client never receives the full recipe (steps, notes, etc.).
@@ -17,23 +17,6 @@ export type RecipeSummary = {
 type RecipeListProps = {
   recipes: RecipeSummary[];
 };
-
-// Write the search to the URL without adding history entries or
-// asking the server for anything. An empty search is left out, so an
-// unfiltered list stays at plain /recipes.
-function syncUrl(search: string) {
-  const params = new URLSearchParams(window.location.search);
-
-  if (search.trim()) params.set("q", search);
-  else params.delete("q");
-
-  const qs = params.toString();
-  window.history.replaceState(
-    null,
-    "",
-    qs ? `?${qs}` : window.location.pathname
-  );
-}
 
 // Pure helpers, outside the component: easy to read and easy to test.
 function matchesSearch(recipe: RecipeSummary, query: string): boolean {
@@ -127,46 +110,23 @@ function RecipeImage({ recipe }: { recipe: RecipeSummary }) {
 }
 
 export default function RecipeList({ recipes }: RecipeListProps) {
-  const searchParams = useSearchParams();
-
-  // Lazy initializer: read the URL once, on the first render.
-  // This works on the server too, so a shared link like
-  // /recipes?q=egg arrives already filtered, with no flash.
-  const [search, setSearch] = useState(() => searchParams.get("q") ?? "");
+  const { search, query, handleChange, clear } = useSearch();
 
   // Derived state: calculated on every render, never stored.
-  const query = search.trim().toLowerCase();
   const filteredRecipes = recipes.filter((recipe) =>
     matchesSearch(recipe, query)
   );
 
   const isFiltering = query !== "";
 
-  // The event handler updates state and the URL together. No useEffect:
-  // the URL changes because the user did something, so the handler
-  // is the right place for it.
-  function handleSearchChange(value: string) {
-    setSearch(value);
-    syncUrl(value);
-  }
-
-  function clearSearch() {
-    setSearch("");
-    syncUrl("");
-  }
-
   return (
     <div>
-      <div className="mx-auto max-w-sm">
-        <input
-          type="search"
-          value={search}
-          onChange={(e) => handleSearchChange(e.target.value)}
-          placeholder="Search by dish or ingredient"
-          aria-label="Search recipes"
-          className="field"
-        />
-      </div>
+      <SearchInput
+        search={search}
+        onChange={handleChange}
+        placeholder="Search by dish or ingredient"
+        label="Search recipes"
+      />
 
       {/* Always rendered, so screen readers are already watching it when
           the count appears, and the grid below doesn't jump. */}
@@ -177,7 +137,7 @@ export default function RecipeList({ recipes }: RecipeListProps) {
       {filteredRecipes.length === 0 ? (
         <div className="text-center">
           <p className="text-muted">No recipes match “{search.trim()}”.</p>
-          <button type="button" onClick={clearSearch} className="btn-quiet mt-4">
+          <button type="button" onClick={clear} className="btn-quiet mt-4">
             Clear search
           </button>
         </div>

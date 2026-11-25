@@ -4,12 +4,9 @@ import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
 import { requireOwner } from "@/lib/owner";
 
-
-// TODO: replace with the real logged-in user once auth is added
-const PLACEHOLDER_USER_ID = "cmtxs8n2l0000muiy9ezqjki9";
-
 export async function createRestaurantVisit(formData: FormData) {
-  await requireOwner();
+  const userId = await requireOwner();
+
   const restaurantName = formData.get("restaurantName") as string;
   const cuisine = formData.get("cuisine") as string;
   const city = formData.get("city") as string;
@@ -29,12 +26,12 @@ export async function createRestaurantVisit(formData: FormData) {
   if (!restaurant) {
     restaurant = await prisma.restaurant.create({
       data: { name: restaurantName, cuisine, city },
-  });
+    });
   }
 
   await prisma.visit.create({
     data: {
-      userId: PLACEHOLDER_USER_ID,
+      userId,
       restaurantId: restaurant.id,
       date: new Date(date),
       rating: rating ? parseInt(rating) : null,

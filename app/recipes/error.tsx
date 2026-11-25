@@ -5,7 +5,6 @@ import Link from "next/link";
 
 // Catches errors anywhere under /recipes: the list, a recipe, the new and
 // edit pages, and Server Actions like deleteRecipe that throw.
-// ✅ fix
 export default function RecipesError({
   error,
   reset,

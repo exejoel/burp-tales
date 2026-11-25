@@ -72,7 +72,7 @@ export default async function RecipeDetailPage({
         <h2 id="ingredients-heading" className="font-display text-2xl font-medium mb-3">
           Ingredients
         </h2>
-        <p>Multiple the recipe by a factor of:</p>
+        <p>Multiply the recipe by a factor of:</p>
         <ScaleIngredients ingredients={ingredients} />
       </section>
 

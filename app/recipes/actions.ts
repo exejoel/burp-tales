@@ -6,9 +6,6 @@ import { redirect } from "next/navigation";
 import { scrapeRecipeFromUrl } from "@/lib/scrapeRecipe";
 import { requireOwner } from "@/lib/owner";
 
-// The owner's row in the User table. Every recipe belongs to it, since
-// only the owner can write (see requireOwner below).
-const PLACEHOLDER_USER_ID = "cmtxs8n2l0000muiy9ezqjki9";
 
 // What a create or update action sends back to the form when it can't
 // save. On success the action redirects instead, so there's no success state.
@@ -73,7 +70,7 @@ export async function createRecipe(
   formData: FormData
 ): Promise<RecipeFormState> {
   // Check first, before reading or validating anything.
-  await requireOwner();
+  const userId = await requireOwner();
 
   const result = readRecipeFields(formData);
   if (!result.ok) return result.state;
@@ -88,7 +85,7 @@ export async function createRecipe(
         ...fields,
         sourceUrl: sourceUrl || null,
         imageUrl: imageUrl || null,
-        userId: PLACEHOLDER_USER_ID,
+        userId,
       },
     });
   } catch (err) {
@@ -114,7 +111,7 @@ export async function updateRecipe(
   formData: FormData
 ): Promise<RecipeFormState> {
   // Check first, before reading or validating anything.
-  await requireOwner();
+  const userId = await requireOwner();
 
   const result = readRecipeFields(formData);
   if (!result.ok) return result.state;
@@ -123,7 +120,7 @@ export async function updateRecipe(
 
   try {
     await prisma.recipe.update({
-      where: { id, userId: PLACEHOLDER_USER_ID },
+      where: { id, userId },
       data: fields,
     });
   } catch (err) {
@@ -146,10 +143,10 @@ export async function updateRecipe(
 // Same trust rule as updateRecipe: the id comes from the browser, so
 // matching on userId means you can only delete your own recipes.
 export async function deleteRecipe(id: string) {
-  await requireOwner();
+  const userId = await requireOwner();
 
   await prisma.recipe.delete({
-    where: { id, userId: PLACEHOLDER_USER_ID },
+    where: { id, userId },
   });
 
   revalidatePath("/recipes");
