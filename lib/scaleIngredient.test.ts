@@ -29,4 +29,18 @@ describe("scaleIngredient", () => {
   it("handles empty string", () => {
     expect(scaleIngredient("", 2)).toBe("");
   });
+
+  it("scales down with half multiplier", () => {
+    expect(scaleIngredient("4 cups flour", 0.5)).toBe("2 cups flour");
+  });
+
+  it("scales decimal amounts", () => {
+    expect(scaleIngredient("1.5 cups cream", 2)).toBe("3 cups cream");
+  });
+
+  it("handles multi-word remainder", () => {
+    expect(scaleIngredient("2 large eggs, beaten", 3)).toBe(
+      "6 large eggs, beaten"
+    );
+  });
 });

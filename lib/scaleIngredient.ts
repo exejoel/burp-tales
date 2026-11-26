@@ -21,6 +21,11 @@ export function scaleIngredient(text: string, multiplier: number): string {
   const regex = /[¼-¾⅐-⅞↉]/g;
   text = text.replace(regex, (match) => String(unicodeFractions[match] ?? match));
 
+  // Handle slash fractions like 1/3, 2/3
+  text = text.replace(/(\d+)\/(\d+)/g, (_, num, den) =>
+    String(parseInt(num) / parseInt(den))
+  );
+
   const match = text.match(/^(\d+\.?\d*)(?:\s+(\d+\.?\d*))?\s+(.*)/);
 
   if (!match) return text;
@@ -28,7 +33,7 @@ export function scaleIngredient(text: string, multiplier: number): string {
   const whole = parseFloat(match[1]);
   const fraction = match[2] ? parseFloat(match[2]) : 0;
   const rest = match[3];
-  const scaled = (whole + fraction) * multiplier;
+  const scaled = parseFloat(((whole + fraction) * multiplier).toFixed(4));
 
   return `${scaled} ${rest}`;
 }
